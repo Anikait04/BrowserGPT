@@ -1,35 +1,33 @@
 import os
 import asyncio
 from dotenv import load_dotenv
-from typing import TypedDict, List, Annotated, Sequence
-from langchain_groq import ChatGroq
+from typing import TypedDict, Sequence, Annotated
+from langchain_openai import ChatOpenAI
+from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage
 from langgraph.graph import StateGraph, END
 from langgraph.prebuilt import ToolNode
-from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage
-from langchain_google_genai import ChatGoogleGenerativeAI
-
-
-load_dotenv()
 from browsertools import tools, get_browser
 
-# Try different models based on availability
-# Priority: tool-use-preview > llama-3.1 > llama-3.3
-MODEL_OPTIONS = [
-    "openai/gpt-oss-20b",  # Best for tools
-              # Latest but may have issues
-]
+load_dotenv()
+
+# Use a reliable free model that supports tool calling well on OpenRouter
+MODEL_NAME = "openai/gpt-oss-20b:free"
+# Alternative if above fails: "meta-llama/llama-3.3-70b-instruct:free"
 
 def create_llm(model_name: str):
-    """Create LLM with proper tool binding"""
-    return ChatGroq(
-        model=model_name,
+    """Create ChatOpenAI LLM instance for OpenRouter"""
+    llm = ChatOpenAI(
+        model_name=model_name,
+        base_url="https://openrouter.ai/api/v1",
         temperature=0.0,
-        api_key=os.getenv("GROQ_API_KEY"),
+        openai_api_key=os.getenv("OPENROUTER_API_KEY"),
         max_retries=2
-    ).bind_tools(tools)
+    )
+    # CRITICAL FIX: Bind tools to the model
+    return llm.bind_tools(tools)
 
-# Start with the best model for tool calling
-llm = create_llm(MODEL_OPTIONS[0])
+# Initialize the LLM with tools bound
+llm = create_llm(MODEL_NAME)
 
 class AgentState(TypedDict):
     goal: str
@@ -55,32 +53,18 @@ async def agent_node(state: AgentState):
 YOUR MISSION: Use browser tools to accomplish the user's goal step by step.
 
 🔧 CRITICAL RULES:
-1. You MUST call exactly ONE tool per response
-2. NEVER write explanatory text without calling a tool
-3. After navigate/click, ALWAYS call read_page next to see the page
-4. Call finish_task ONLY when goal is 100% complete
+1. You MUST call exactly ONE tool per response.
+2. NEVER write explanatory text. Just call the tool.
+3. After navigate/click, ALWAYS call read_page next to see the page.
+4. Call finish_task ONLY when goal is 100% complete.
 
 📋 WORKFLOW PATTERN:
 navigate → read_page → type_text → click_element → read_page → finish_task
 
-🌐 GOOGLE SEARCH EXAMPLE:
-1. navigate("https://google.com")
-2. read_page()  ← See the search box
-3. type_text("textarea[name='q']|your query|enter")
-4. read_page()  ← Verify results loaded
-5. finish_task("Search completed")
-
-⚡ COMMON SELECTORS:
-- Google search: textarea[name="q"] or input[name="q"]
-- Submit buttons: button[type="submit"] or input[type="submit"]
-- By ID: #element-id
-- By class: .class-name
-
 🎯 YOUR NEXT ACTION: Choose ONE tool that progresses toward the goal."""
 
-    # Simplified user prompt
     recent_actions = state.get('last_action', 'none')
-    page_preview = state.get('page_content', 'No content yet')[:400]
+    page_preview = state.get('page_content', 'No content yet')[:600] # Increased context slightly
     
     user_prompt = f"""🎯 GOAL: {state['goal']}
 
@@ -89,7 +73,7 @@ navigate → read_page → type_text → click_element → read_page → finish_
 - Last action: {recent_actions}
 - Page preview: {page_preview}
 
-❓ What is the ONE tool you should call now to make progress?"""
+❓ What is the ONE tool you should call now?"""
 
     messages = [
         SystemMessage(content=system_prompt),
@@ -103,18 +87,7 @@ navigate → read_page → type_text → click_element → read_page → finish_
     except Exception as e:
         error_msg = str(e)
         print(f"❌ LLM Error: {error_msg}")
-        
-        # If tool calling fails, try alternative model
-        if "tool_use_failed" in error_msg or "400" in error_msg:
-            print("🔄 Trying alternative model...")
-            alternative_llm = create_llm(MODEL_OPTIONS[1])
-            try:
-                response = await alternative_llm.ainvoke(messages)
-            except Exception as e2:
-                print(f"❌ Alternative model also failed: {e2}")
-                raise
-        else:
-            raise
+        raise
     
     return {
         "messages": state["messages"] + [response],
@@ -133,11 +106,14 @@ async def tool_execution_node(state: AgentState):
     tool_node = ToolNode(tools)
     result = await tool_node.ainvoke({"messages": [last_msg]})
     
-    # Extract tool name and result
+    # Extract tool name and result for logging
     tool_name = last_msg.tool_calls[0]['name']
-    tool_result = result["messages"][-1].content if result["messages"] else ""
     
-    print(f"   ✅ {tool_name}: {tool_result[:100]}")
+    # Result comes back as a ToolMessage
+    tool_output_msg = result["messages"][-1]
+    tool_result = tool_output_msg.content
+    
+    print(f"   ✅ {tool_name}: {tool_result[:100]}...")
     
     # Update page content if we read the page
     page_content = state.get("page_content", "")
@@ -191,7 +167,7 @@ async def run_agent(goal: str, max_steps: int = 15):
     print(f"🚀 Starting browser agent")
     print(f"📋 Goal: {goal}")
     print(f"⚙️ Max steps: {max_steps}")
-    print(f"🤖 Model: {llm.model_name}\n")
+    print(f"🤖 Model: {MODEL_NAME}\n")
     
     try:
         initial_state = {
@@ -205,7 +181,7 @@ async def run_agent(goal: str, max_steps: int = 15):
         
         # Stream execution
         async for chunk in app.astream(initial_state, stream_mode="values"):
-            pass  # Progress is printed in nodes
+            pass
         
         print("\n" + "="*50)
         print("✅ Agent execution finished!")
@@ -226,9 +202,9 @@ async def run_agent(goal: str, max_steps: int = 15):
 async def main():
     """Main entry point with example tasks"""
     
-    # Verify API key
-    if not os.getenv("GROQ_API_KEY"):
-        print("❌ ERROR: GROQ_API_KEY not found in .env file")
+    # Fix: Check correctly for OpenRouter Key
+    if not os.getenv("OPENROUTER_API_KEY"):
+        print("❌ ERROR: OPENROUTER_API_KEY not found in .env file")
         return
     
     print("="*60)
@@ -240,27 +216,6 @@ async def main():
         goal="Go to google.com and search for 'LangGraph' and then click the first result",
         max_steps=12
     )
-    
-    # Uncomment to try other tasks:
-    
-    # TASK 2: Navigate and read
-    # await run_agent(
-    #     goal="Go to github.com and read the main page content",
-    #     max_steps=8
-    # )
-    
-    # TASK 3: Search with screenshot
-    # await run_agent(
-    #     goal="Search Google for 'Playwright Python' and take a screenshot",
-    #     max_steps=12
-    # )
-    
-    # TASK 4: Multiple searches
-    # await run_agent(
-    #     goal="Go to google.com, search for 'web scraping ethics', "
-    #          "read the results, then take a screenshot",
-    #     max_steps=15
-    # )
 
 if __name__ == "__main__":
     asyncio.run(main())
