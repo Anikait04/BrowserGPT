@@ -162,7 +162,7 @@ graph.add_edge("tools", "agent")
 
 app = graph.compile()
 
-async def run_agent(goal: str, max_steps: int = 15):
+async def run_agent(goal: str, max_steps: int = 30):
     """Run the browser agent with a specific goal"""
     print(f"🚀 Starting browser agent")
     print(f"📋 Goal: {goal}")
@@ -213,8 +213,8 @@ async def main():
     
     # TASK 1: Simple Google search
     await run_agent(
-        goal="Go to google.com and search for 'LangGraph' and then click the first result",
-        max_steps=12
+        goal="Go to youtube.com and search for hello, then play the first video.",
+        max_steps=30
     )
 
 if __name__ == "__main__":

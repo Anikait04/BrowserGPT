@@ -23,7 +23,7 @@ class Browser:
                     '--disable-blink-features=AutomationControlled'  # Avoid detection
                 ]
             )
-            self.page = await self.browser.new_page(viewport={'width': 1920, 'height': 1080})
+            self.page = await self.browser.new_page(no_viewport=True)
             self.page.set_default_timeout(20000)  # 20 second default timeout
             logger.info("✅ Browser started successfully")
         except Exception as e:
