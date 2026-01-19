@@ -1,3 +1,6 @@
 /.env
 /__pycache__
 main.ipynb
+agent_flow.png
+/traces
+/logs
