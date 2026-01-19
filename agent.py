@@ -1,7 +1,8 @@
 import os
 import asyncio
+from enum import Enum
+from typing import TypedDict, Sequence, Annotated, Literal
 from dotenv import load_dotenv
-from typing import TypedDict, Sequence, Annotated
 
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage
@@ -9,210 +10,373 @@ from langgraph.graph import StateGraph, END
 from langgraph.prebuilt import ToolNode
 
 from browsertools import tools, get_browser
-from prompt import get_prompt
-from logs import logger, log_separator
+from logs import logger
 
 load_dotenv()
 
-MODEL_NAME = "openai/gpt-oss-20b:free"
+MODEL_NAME = "openai/gpt-oss-20b:free"  # More capable model
 
+# ============================================================================
+# ENUMS FOR TYPE SAFETY
+# ============================================================================
 
-def save_successful_run(goal: str, actions: list[str]):
-    os.makedirs("success_prev_run", exist_ok=True)
+class ActionStatus(str, Enum):
+    SUCCESS = "success"
+    FAILURE = "failure"
+    BLOCKED = "blocked"
+    UNKNOWN = "unknown"
 
-    safe_goal = goal.replace(" ", "_")[:50]
-    filename = f"success_prev_run/{safe_goal}.txt"
+class FailureType(str, Enum):
+    ELEMENT_NOT_FOUND = "element_not_found"
+    TIMEOUT = "timeout"
+    NAVIGATION_ERROR = "navigation_error"
+    SELECTOR_ERROR = "selector_error"
+    BLOCKED_BY_CAPTCHA = "blocked_by_captcha"
+    UNKNOWN = "unknown"
 
-    with open(filename, "w", encoding="utf-8") as f:
-        f.write(f"GOAL:\n{goal}\n\n")
-        f.write("SUCCESSFUL ACTIONS:\n")
-        for i, action in enumerate(actions, 1):
-            f.write(f"{i}. {action}\n")
-
-    logger.info(f"Saved successful run → {filename}")
-
-
-def create_llm(model_name: str):
-    """Create ChatOpenAI LLM instance for OpenRouter"""
-    logger.info(f"Initializing LLM: {model_name}")
-
-    llm = ChatOpenAI(
-        model_name=model_name,
-        base_url="https://openrouter.ai/api/v1",
-        temperature=0.2,
-        openai_api_key=os.getenv("OPENROUTER_API_KEY"),
-        max_retries=2
-    )
-
-    logger.debug("Binding browser tools to LLM")
-    return llm.bind_tools(tools)
-
-
-llm = create_llm(MODEL_NAME)
-
+# ============================================================================
+# IMPROVED STATE
+# ============================================================================
 
 class AgentState(TypedDict):
     goal: str
     messages: Annotated[Sequence[BaseMessage], "Message history"]
+    
+    # Execution tracking
     steps: int
     max_steps: int
-    last_action: str
-    page_content: str
-    all_actions: Annotated[Sequence[str], "All actions taken so far"]
+    consecutive_failures: int  # NEW: Track failure streaks
+    
+    # Page state
+    current_url: str
+    page_title: str
+    page_content: str  # Store more content
+    
+    # Error handling
+    last_error: str | None
+    failure_type: FailureType | None
+    
+    # Success tracking
+    all_actions: Annotated[list[str], "All actions taken"]
+    successful_actions: Annotated[list[str], "Only successful actions"]
 
+# ============================================================================
+# IMPROVED PROMPTS
+# ============================================================================
+
+AGENT_SYSTEM_PROMPT = """You are a browser automation agent with access to browser control tools.
+
+**YOUR OBJECTIVE**: Accomplish the user's goal by calling the appropriate tools.
+
+**IMPORTANT RULES**:
+1. You have direct access to browser tools - just call them, no intent resolution needed
+2. Always call read_page() after navigation or page changes to understand the page
+3. Use specific CSS selectors from the page content you've read
+4. If an action fails, try an alternative approach (different selector, different tool)
+5. Call finish_task() ONLY when the goal is fully achieved
+
+**AVAILABLE TOOLS**: {tool_names}
+
+**STRATEGY**:
+- Navigate → Read → Interact → Verify → Complete
+- Prefer stable selectors (id, name, data-* attributes)
+- Use click_text() when CSS selectors are unreliable
+- Wait for page loads using wait_for_navigation() after clicks
+
+**CURRENT GOAL**: {goal}
+**CURRENT URL**: {current_url}
+**STEPS TAKEN**: {steps}/{max_steps}
+"""
+
+# ============================================================================
+# IMPROVED LLM SETUP
+# ============================================================================
+
+def create_llm(model_name: str):
+    """Create LLM with better configuration"""
+    logger.info(f"Initializing LLM: {model_name}")
+    
+    llm = ChatOpenAI(
+        model_name=model_name,
+        base_url="https://openrouter.ai/api/v1",
+        temperature=0.1,  # Lower temperature for more consistent behavior
+        openai_api_key=os.getenv("OPENROUTER_API_KEY"),
+        max_retries=3,
+        request_timeout=60
+    )
+    
+    # Bind tools directly - no need for separate intent resolution!
+    return llm.bind_tools(tools)
+
+llm = create_llm(MODEL_NAME)
+
+# ============================================================================
+# SIMPLIFIED AGENT NODE
+# ============================================================================
 
 async def agent_node(state: AgentState):
-    """Agent decision node"""
+    """Main agent decision node - simplified!"""
+    
+    # Check limits
     if state["steps"] >= state["max_steps"]:
         logger.warning(f"Max steps ({state['max_steps']}) reached")
         return {
-            "messages": state["messages"] + [AIMessage(content="Max steps reached, stopping")],
-            "steps": state["steps"] + 1,
-            "last_action": "max_steps_reached"
+            **state,
+            "messages": state["messages"] + [AIMessage(content="Max steps reached")],
         }
+    
+    # Check failure streak
+    if state["consecutive_failures"] >= 3:
+        logger.error("Too many consecutive failures, stopping")
+        return {
+            **state,
+            "messages": state["messages"] + [
+                AIMessage(content="Stopping due to repeated failures")
+            ],
+        }
+    
+    # Build context-aware prompt
+    tool_names = ", ".join([t.name for t in tools])
+    system_prompt = AGENT_SYSTEM_PROMPT.format(
+        tool_names=tool_names,
+        goal=state["goal"],
+        current_url=state.get("current_url", "unknown"),
+        steps=state["steps"],
+        max_steps=state["max_steps"]
+    )
+    
+    # Build message history with context
+    context_msg = f"""
+CURRENT SITUATION:
+- Page: {state.get('page_title', 'Unknown')}
+- URL: {state.get('current_url', 'None')}
+- Last Error: {state.get('last_error', 'None')}
 
-    prompt_navigate = get_prompt("navigate_prompt")
+PAGE CONTENT (last 1000 chars):
+{state.get('page_content', '')[-1000:]}
 
-    recent_actions = state.get("last_action", "none")
-    page_preview = state.get("page_content", "No content yet")[:600]
-
-    user_prompt = f"""🎯 GOAL: {state['goal']}
-
-📊 STATUS:
-- Step: {state['steps']}/{state['max_steps']}
-- Last action: {recent_actions}
-- Page preview: {page_preview}
-
-❓ What is the ONE tool you should call now?"""
-
+What action should you take next to achieve the goal?
+"""
+    
     messages = [
-        SystemMessage(content=prompt_navigate),
-        HumanMessage(content=user_prompt)
-    ] + list(state["messages"][-4:])
-
+        SystemMessage(content=system_prompt),
+        HumanMessage(content=context_msg)
+    ] + list(state["messages"][-6:])  # Keep last 6 messages for context
+    
     logger.info(f"Agent thinking (Step {state['steps'] + 1}/{state['max_steps']})")
-
+    
     try:
         response = await llm.ainvoke(messages)
-    except Exception:
+        logger.info(f"Agent decided: {response.tool_calls[0]['name'] if response.tool_calls else 'no tool'}")
+    except Exception as e:
         logger.exception("LLM invocation failed")
         raise
-
+    
     return {
+        **state,
         "messages": state["messages"] + [response],
         "steps": state["steps"] + 1,
-        "last_action": state.get("last_action", ""),
-        "page_content": state.get("page_content", "")
     }
 
+# ============================================================================
+# IMPROVED TOOL EXECUTION
+# ============================================================================
 
 async def tool_execution_node(state: AgentState):
-    """Execute tools and capture results"""
+    """Execute tool and analyze result"""
     last_msg = state["messages"][-1]
-
+    
     if not hasattr(last_msg, "tool_calls") or not last_msg.tool_calls:
-        logger.debug("No tool calls detected")
         return state
-
+    
+    # Execute tool
     tool_node = ToolNode(tools)
     result = await tool_node.ainvoke({"messages": [last_msg]})
-
+    
     tool_name = last_msg.tool_calls[0]["name"]
-    tool_output_msg = result["messages"][-1]
-    tool_result = tool_output_msg.content
-
-    logger.info(f"Tool executed: {tool_name}")
-    logger.debug(f"Tool output preview: {tool_result[:200]}")
-
+    tool_output = result["messages"][-1].content
+    
+    logger.info(f"Tool '{tool_name}' executed: {tool_output[:100]}")
+    
+    # Analyze result
+    status = analyze_tool_result(tool_output)
+    failure_type = None
+    last_error = None
+    consecutive_failures = state.get("consecutive_failures", 0)
+    
+    if status == ActionStatus.FAILURE:
+        failure_type = categorize_failure(tool_output)
+        last_error = tool_output
+        consecutive_failures += 1
+        logger.warning(f"Tool failed: {failure_type}")
+    else:
+        consecutive_failures = 0  # Reset on success
+    
+    # Update page state if we read the page
     page_content = state.get("page_content", "")
+    page_title = state.get("page_title", "")
+    current_url = state.get("current_url", "")
+    
     if tool_name == "read_page":
-        page_content = tool_result
-
-    clean_result = tool_result[:200].replace("\n", " ")
-    action_log = f"{tool_name}: {clean_result}"
-
+        page_content = tool_output
+        # Extract title and URL from output if present
+        if "Title:" in tool_output:
+            lines = tool_output.split("\n")
+            for line in lines:
+                if line.startswith("Title:"):
+                    page_title = line.replace("Title:", "").strip()
+                if line.startswith("URL:"):
+                    current_url = line.replace("URL:", "").strip()
+    
+    # Track successful actions
+    successful_actions = state.get("successful_actions", [])
+    if status == ActionStatus.SUCCESS:
+        successful_actions = successful_actions + [tool_name]
+    
     return {
+        **state,
         "messages": state["messages"] + result["messages"],
-        "steps": state["steps"],
-        "last_action": tool_name,
+        "all_actions": state["all_actions"] + [tool_name],
+        "successful_actions": successful_actions,
+        "consecutive_failures": consecutive_failures,
+        "failure_type": failure_type,
+        "last_error": last_error,
         "page_content": page_content,
-        "all_actions": state["all_actions"] + [action_log]
+        "page_title": page_title,
+        "current_url": current_url,
     }
 
+# ============================================================================
+# RESULT ANALYSIS
+# ============================================================================
 
-def router(state: AgentState):
+def analyze_tool_result(output: str) -> ActionStatus:
+    """Determine if tool execution succeeded"""
+    output_lower = output.lower()
+    
+    # Success indicators
+    if any(word in output_lower for word in ["successfully", "completed", "navigated to"]):
+        return ActionStatus.SUCCESS
+    
+    # Failure indicators
+    if any(word in output_lower for word in ["error", "failed", "could not", "timeout", "not find"]):
+        return ActionStatus.FAILURE
+    
+    # Blocked indicators
+    if any(word in output_lower for word in ["captcha", "blocked", "access denied"]):
+        return ActionStatus.BLOCKED
+    
+    return ActionStatus.UNKNOWN
+
+def categorize_failure(output: str) -> FailureType:
+    """Categorize the type of failure"""
+    output_lower = output.lower()
+    
+    if "timeout" in output_lower:
+        return FailureType.TIMEOUT
+    if any(word in output_lower for word in ["not find", "no such element"]):
+        return FailureType.ELEMENT_NOT_FOUND
+    if any(word in output_lower for word in ["selector", "invalid selector"]):
+        return FailureType.SELECTOR_ERROR
+    if "navigation" in output_lower:
+        return FailureType.NAVIGATION_ERROR
+    if "captcha" in output_lower:
+        return FailureType.BLOCKED_BY_CAPTCHA
+    
+    return FailureType.UNKNOWN
+
+# ============================================================================
+# ROUTER
+# ============================================================================
+
+def router(state: AgentState) -> Literal["tools", "end"]:
     """Route graph execution"""
     last_msg = state["messages"][-1]
-
+    
+    # Check termination conditions
     if state["steps"] >= state["max_steps"]:
-        logger.warning("Stopping graph: max steps reached")
-        return END
-
-    if state.get("last_action") == "finish_task":
-        save_successful_run(state["goal"], state["all_actions"])
-        logger.info("Task completed successfully")
-        return END
-
+        logger.warning("Max steps reached")
+        return "end"
+    
+    if state.get("consecutive_failures", 0) >= 3:
+        logger.error("Too many failures, ending")
+        return "end"
+    
+    # Check if tool should be called
     if hasattr(last_msg, "tool_calls") and last_msg.tool_calls:
         tool_name = last_msg.tool_calls[0]["name"]
+        
+        # Check for finish
+        if tool_name == "finish_task":
+            logger.info("Task completed")
+            return "end"
+        
         logger.info(f"Routing to tool: {tool_name}")
         return "tools"
+    
+    logger.warning("No tool called, ending")
+    return "end"
 
-    logger.warning("No tool called, ending execution")
-    return END
+# ============================================================================
+# BUILD GRAPH
+# ============================================================================
 
-
-# Build graph
 graph = StateGraph(AgentState)
+
+# Simple 2-node graph!
 graph.add_node("agent", agent_node)
 graph.add_node("tools", tool_execution_node)
 
 graph.set_entry_point("agent")
-graph.add_conditional_edges("agent", router, {"tools": "tools", END: END})
-graph.add_edge("tools", "agent")
+graph.add_conditional_edges("agent", router, {"tools": "tools", "end": END})
+graph.add_edge("tools", "agent")  # Loop back after tool execution
 
 app = graph.compile()
 
-png_bytes = app.get_graph().draw_mermaid_png()
-with open("agent_flow.png", "wb") as f:
-    f.write(png_bytes)
+# ============================================================================
+# RUN AGENT
+# ============================================================================
 
-logger.info("Agent flow graph saved as agent_flow.png")
-
-
-async def run_agent(goal: str, max_steps: int = 30):
-    """Run the browser agent"""
-    log_separator("AGENT RUN START")
-
-    logger.info(f"Goal: {goal}")
-    logger.info(f"Max steps: {max_steps}")
-    logger.info(f"Model: {MODEL_NAME}")
-
+async def run_agent(goal: str, max_steps: int = 20):
+    """Run the improved browser agent"""
+    logger.info(f"Starting agent with goal: {goal}")
+    
     try:
         initial_state = {
             "goal": goal,
             "messages": [],
             "steps": 0,
             "max_steps": max_steps,
-            "last_action": "none",
+            "consecutive_failures": 0,
+            "current_url": "",
+            "page_title": "",
             "page_content": "",
-            "all_actions": []
+            "last_error": None,
+            "failure_type": None,
+            "all_actions": [],
+            "successful_actions": []
         }
-
-        async for _ in app.astream(initial_state, stream_mode="values"):
-            pass
-
-        logger.info("Agent execution finished successfully")
-
+        
+        final_state = None
+        async for state in app.astream(initial_state, stream_mode="values"):
+            final_state = state
+        
+        # Report results
+        logger.info("=" * 60)
+        logger.info("EXECUTION SUMMARY")
+        logger.info("=" * 60)
+        logger.info(f"Total steps: {final_state['steps']}")
+        logger.info(f"Successful actions: {len(final_state['successful_actions'])}")
+        logger.info(f"All actions: {final_state['all_actions']}")
+        logger.info(f"Final URL: {final_state.get('current_url', 'unknown')}")
+        logger.info("=" * 60)
+        
     except Exception:
         logger.exception("Agent execution failed")
-
     finally:
         try:
             browser = await get_browser()
             await browser.close()
-            logger.info("Browser closed cleanly")
+            logger.info("Browser closed")
         except Exception:
             logger.warning("Browser cleanup failed", exc_info=True)
-
-        log_separator("AGENT RUN END")
