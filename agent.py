@@ -29,7 +29,7 @@ def save_successful_run(goal: str, actions: list[str]):
         for i, action in enumerate(actions, 1):
             f.write(f"{i}. {action}\n")
 
-    logger.info(f"Saved successful run → {filename}")
+    logger.info(f"Saved successful run  {filename}")
 
 
 def create_llm(model_name: str):
@@ -76,14 +76,14 @@ async def agent_node(state: AgentState):
     recent_actions = state.get("last_action", "none")
     page_preview = state.get("page_content", "No content yet")[:600]
 
-    user_prompt = f"""🎯 GOAL: {state['goal']}
+    user_prompt = f"""GOAL: {state['goal']}
 
-📊 STATUS:
+STATUS:
 - Step: {state['steps']}/{state['max_steps']}
 - Last action: {recent_actions}
 - Page preview: {page_preview}
 
-❓ What is the ONE tool you should call now?"""
+What is the ONE tool you should call now?"""
 
     messages = [
         SystemMessage(content=prompt_navigate),

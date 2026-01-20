@@ -22,7 +22,7 @@ class Browser:
             )
             self.page = await self.browser.new_page(no_viewport=True)
             self.page.set_default_timeout(20000)  # 20 second default timeout
-            logger.info("✅ Browser started successfully")
+            logger.info("Browser started successfully")
         except Exception:
             logger.exception("Failed to start browser")
             raise

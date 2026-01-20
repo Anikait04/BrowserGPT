@@ -1,7 +1,7 @@
 import asyncio
 import os
 
-from agent import run_agent
+from test_agent import run_agent
 from logs import logger, log_separator
 
 
