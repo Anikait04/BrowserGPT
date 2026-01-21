@@ -20,11 +20,11 @@ async def main():
     logger.info("Starting Browser Automation Agent")
 
     # TASK 1: Simple Google search
-    logger.info("Task started: Google search for langchain.com")
+    logger.info("Task started")
 
     try:
         await run_agent(
-            goal="Search for langchain.com and click the first result.",
+            goal="go on youtube.com, and play star boys song",
             max_steps=30
         )
         logger.info("Task completed successfully")

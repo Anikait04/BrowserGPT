@@ -4,3 +4,5 @@ main.ipynb
 agent_flow.png
 /traces
 /logs
+/success_prev_run
+agent_flow_ipynb.png
