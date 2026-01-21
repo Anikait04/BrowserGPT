@@ -24,7 +24,7 @@ async def main():
 
     try:
         await run_agent(
-            goal="go on youtube.com, and play star boys song",
+            goal="go on youtube.com, and search for star boys song and then play the first video",
             max_steps=30
         )
         logger.info("Task completed successfully")

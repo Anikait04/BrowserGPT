@@ -60,8 +60,6 @@ class AgentState(TypedDict):
 
     all_actions: List[str]
     visited: set
-    
-    needs_interaction: bool  # NEW: Flag to indicate if interaction is needed
 
 # ---------------------------------------------------------------------
 # Planner
@@ -83,7 +81,7 @@ async def planner_node(state: AgentState):
         for line in response.content.splitlines()
         if line.strip()
     ]
-    print("planner_node:::::", response.content)
+
     return {
         **state,
         "plan": plan,
@@ -92,7 +90,7 @@ async def planner_node(state: AgentState):
     }
 
 # ---------------------------------------------------------------------
-# Agent (handles ALL interactions via tool calls)
+# Agent (navigation / read only)
 # ---------------------------------------------------------------------
 
 async def agent_node(state: AgentState):
@@ -109,21 +107,6 @@ async def agent_node(state: AgentState):
         else "Finish the task"
     )
 
-    # If there's a chosen element, provide it to the agent for interaction
-    chosen_info = ""
-    if state.get("chosen_element"):
-        el = state["chosen_element"]
-        chosen_info = f"""
-CHOSEN ELEMENT TO INTERACT WITH:
-- Type: {el['type']}
-- Label: {el['label']}
-- Selector: {el['selector']}
-
-You MUST interact with this element using the appropriate tool:
-- For 'input': use type_text with format "selector|text|enter"
-- For 'button' or 'link': use click_element with the selector
-"""
-
     prompt = get_prompt("navigate_prompt")
 
     user_prompt = f"""
@@ -138,16 +121,13 @@ STATUS:
 - Last action: {state['last_action']}
 - Current URL: {state['current_url'] or 'none'}
 
-{chosen_info}
-
 PAGE PREVIEW:
 {state['page_content'][:600]}
 
 Rules:
+- ONLY navigate or read
+- NEVER click or type
 - Call EXACTLY ONE tool or finish_task
-- If a chosen element is provided, interact with it using the appropriate tool
-- Navigate, click, or type as needed
-- Do NOT call read_page (reading happens separately)
 """
 
     response = await llm.ainvoke(
@@ -156,13 +136,11 @@ Rules:
             HumanMessage(content=user_prompt),
         ]
     )
-    print("agent_node:::::", response.content)
-    
+
     return {
         **state,
         "messages": state["messages"] + [response],
         "steps": state["steps"] + 1,
-        "chosen_element": None,  # Clear chosen element after agent processes it
     }
 
 # ---------------------------------------------------------------------
@@ -189,32 +167,16 @@ async def tool_execution_node(state: AgentState):
             if line.lower().startswith("current url"):
                 current_url = line.split(":", 1)[1].strip()
 
-    # Mark that we need to read page after navigation or interaction
-    needs_interaction = tool_name in ["navigate", "click_element", "type_text"]
+    page_content = state["page_content"]
+    if tool_name == "read_page":
+        page_content = output
 
     return {
         **state,
         "messages": state["messages"] + result["messages"],
         "last_action": tool_name,
         "current_url": current_url,
-        "needs_interaction": needs_interaction,
-    }
-
-# ---------------------------------------------------------------------
-# Read page (separate from agent, happens after tool execution)
-# ---------------------------------------------------------------------
-
-async def read_page_node(state: AgentState):
-    """Reads the current page content after navigation or interaction"""
-    browser = await get_browser()
-    page_content = await browser.read()
-    
-    logger.info("Page content read")
-    
-    return {
-        **state,
         "page_content": page_content,
-        "needs_interaction": False,
     }
 
 # ---------------------------------------------------------------------
@@ -332,7 +294,7 @@ ELEMENTS:
 
     choice = response.content.strip()
     chosen = None
-    print("choose_element_node:::::", choice)
+
     if choice.isdigit():
         chosen = next(
             (c for c in state["dom_candidates"] if c["id"] == int(choice)),
@@ -346,6 +308,33 @@ ELEMENTS:
     }
 
 # ---------------------------------------------------------------------
+# Executor (only place that clicks/types)
+# ---------------------------------------------------------------------
+
+async def executor_node(state: AgentState):
+    chosen = state["chosen_element"]
+    if not chosen:
+        return state
+
+    browser = await get_browser()
+
+    if chosen["type"] == "input":
+        await browser.type(
+            chosen["selector"],
+            state["goal"],
+            press_enter=True,
+        )
+
+    elif chosen["type"] in ("button", "link"):
+        await browser.click(chosen["selector"])
+
+    return {
+        **state,
+        "last_action": f"interacted_{chosen['type']}",
+        "chosen_element": None,
+    }
+
+# ---------------------------------------------------------------------
 # Verifier
 # ---------------------------------------------------------------------
 
@@ -356,39 +345,32 @@ async def verifier_node(state: AgentState):
             HumanMessage(
                 content=f"""
 Goal: {state['goal']}
-Current plan step: {state['plan'][state['current_plan_step']] if state['current_plan_step'] < len(state['plan']) else 'Complete'}
 Page preview:
 {state['page_content'][:500]}
 
-Did this action move us closer to completing the current plan step?
+Did this move us closer to the goal?
 """
             ),
         ]
     )
-    print("verifier_node:::::", verdict.content)
-    
+
     if "yes" in verdict.content.lower():
-        # Success: move to next plan step
         return {
-            **state,
             "current_plan_step": min(
                 state["current_plan_step"] + 1,
                 len(state["plan"]),
             )
         }
-    else:
-        # Failure: increment steps but don't advance plan
-        return {
-            **state,
-            "steps": state["steps"] + 1,
-        }
+
+    return {
+        "steps": state["steps"] + 1
+    }
 
 # ---------------------------------------------------------------------
-# Routers
+# Router
 # ---------------------------------------------------------------------
 
-def agent_router(state: AgentState):
-    """Routes from agent based on whether tool was called"""
+def router(state: AgentState):
     if state["last_action"] == "finish_task":
         return END
 
@@ -397,20 +379,6 @@ def agent_router(state: AgentState):
         return "tools"
 
     return END
-
-def tool_router(state: AgentState):
-    """Routes from tools - if interaction happened, read page and extract DOM"""
-    if state.get("needs_interaction", False):
-        return "read_page"
-    return END
-
-def choose_router(state: AgentState):
-    """Routes from choose_element - if element chosen, go to agent; otherwise read and try again"""
-    if state.get("chosen_element"):
-        return "agent"
-    else:
-        # No suitable element found, go back to agent for different action
-        return "agent"
 
 # ---------------------------------------------------------------------
 # Graph
@@ -421,82 +389,22 @@ graph = StateGraph(AgentState)
 graph.add_node("planner", planner_node)
 graph.add_node("agent", agent_node)
 graph.add_node("tools", tool_execution_node)
-graph.add_node("read_page", read_page_node)
 graph.add_node("extract_dom", extract_dom_node)
 graph.add_node("choose_element", choose_element_node)
+graph.add_node("executor", executor_node)
 graph.add_node("verifier", verifier_node)
 
-# Flow:
-# planner -> agent
 graph.set_entry_point("planner")
+
 graph.add_edge("planner", "agent")
-
-# agent -> tools (if tool called) OR END (if finish_task)
-graph.add_conditional_edges("agent", agent_router, {"tools": "tools", END: END})
-
-# tools -> read_page (if interaction happened) OR END
-graph.add_conditional_edges("tools", tool_router, {"read_page": "read_page", END: END})
-
-# read_page -> extract_dom -> choose_element
-graph.add_edge("read_page", "extract_dom")
+graph.add_conditional_edges("agent", router, {"tools": "tools", END: END})
+graph.add_edge("tools", "extract_dom")
 graph.add_edge("extract_dom", "choose_element")
-
-# choose_element -> agent (with chosen element to interact)
-graph.add_conditional_edges("choose_element", choose_router, {"agent": "agent"})
-
-# After agent executes the interaction (via tools), verify
-# We need to add verifier after the interaction is complete
-# The verifier should run after read_page when coming from an interaction
-# Let's restructure: tools -> read_page -> verifier -> extract_dom -> choose_element -> agent
-
-# Actually, let me reconsider the flow based on your requirements:
-# 1. Agent decides action (navigate/click/type) -> tools
-# 2. Tools execute -> read_page 
-# 3. Read page -> verifier
-# 4. Verifier checks if successful
-#    - If yes: move to next plan step, go to extract_dom
-#    - If no: go to extract_dom (retry)
-# 5. extract_dom -> choose_element
-# 6. choose_element -> agent (with element to interact with)
-
-# Let me rebuild the graph properly:
-
-graph = StateGraph(AgentState)
-
-graph.add_node("planner", planner_node)
-graph.add_node("agent", agent_node)
-graph.add_node("tools", tool_execution_node)
-graph.add_node("read_page", read_page_node)
-graph.add_node("verifier", verifier_node)
-graph.add_node("extract_dom", extract_dom_node)
-graph.add_node("choose_element", choose_element_node)
-
-# Entry point
-graph.set_entry_point("planner")
-graph.add_edge("planner", "agent")
-
-# Agent routes
-graph.add_conditional_edges("agent", agent_router, {"tools": "tools", END: END})
-
-# After tools, always read page
-graph.add_edge("tools", "read_page")
-
-# After reading page, verify the action
-graph.add_edge("read_page", "verifier")
-
-# After verification, extract DOM for next interaction
-graph.add_edge("verifier", "extract_dom")
-
-# After extracting DOM, choose element
-graph.add_edge("extract_dom", "choose_element")
-
-# After choosing element, go back to agent to interact with it
-graph.add_edge("choose_element", "agent")
+graph.add_edge("choose_element", "executor")
+graph.add_edge("executor", "verifier")
+graph.add_edge("verifier", "agent")
 
 app = graph.compile()
-png_bytes = app.get_graph().draw_mermaid_png()
-with open("agent_flow.png", "wb") as f:
-    f.write(png_bytes)
 
 # ---------------------------------------------------------------------
 # Runner
@@ -519,7 +427,6 @@ async def run_agent(goal: str, max_steps: int = 30):
         "chosen_element": None,
         "all_actions": [],
         "visited": set(),
-        "needs_interaction": False,
     }
 
     try:

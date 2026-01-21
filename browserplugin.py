@@ -98,7 +98,7 @@ class Browser:
             if press_enter:
                 await self.page.keyboard.press("Enter")
                 await asyncio.sleep(1)
-                logger.info("⏎ Pressed Enter")
+                logger.info("Pressed Enter")
             
             await asyncio.sleep(0.5)
             logger.info(f"Typed into: {selector}")
