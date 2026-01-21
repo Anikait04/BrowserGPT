@@ -14,12 +14,37 @@ from logs import logger, log_separator
 
 load_dotenv()
 
+# --- LLM Setup ---
+MODEL_NAME = "openai/gpt-oss-20b:free"
+
+def create_llm(model_name: str, bind_tools: bool = False) -> ChatOpenAI:
+    """Create LLM instance"""
+    logger.info(f"Initializing LLM: {model_name}")
+    llm = ChatOpenAI(
+        model_name=model_name,
+        base_url="https://openrouter.ai/api/v1",
+        temperature=0.5,
+        openai_api_key=os.getenv("OPENROUTER_API_KEY"),
+        max_retries=2
+    )
+    return llm.bind_tools(tools) if bind_tools else llm
+
+llm = create_llm(MODEL_NAME, bind_tools=False)
+llm_tools = create_llm(MODEL_NAME, bind_tools=True)
+
 # --- Pydantic Models ---
 class BrowserAction(BaseModel):
     step_description: str = Field(..., description="Simple step description like 'navigate to google'")
 
 class IntentParseResult(BaseModel):
     actions: List[BrowserAction] = Field(..., description="Simple step description like 'navigate to google'")
+    current_step: list[str] = Field(None, description="Current Step to take step to take")
+    confidence: float = Field(..., ge=0.0, le=1.0, description="Confidence score")
+    high_level_goal: str = Field(..., description="Simplified goal summary")
+
+class ManageParseResult(BaseModel):
+    action: List[BrowserAction] = Field(..., description="Simple step description like 'navigate to google'")
+    current_step: list[str] = Field(None, description="Current Step to take step to take")
     confidence: float = Field(..., ge=0.0, le=1.0, description="Confidence score")
     high_level_goal: str = Field(..., description="Simplified goal summary")
 
@@ -51,27 +76,11 @@ class AgentState(TypedDict, total=False):
     page_content: str
     all_actions: Annotated[Sequence[str], "All actions taken so far"]
     current_plan: Annotated[Sequence[str], "Current execution plan"]
+    initial_step:str
     extracted_data: Annotated[Dict[str, Any], "Data collected so far"]
     task_complete: bool
     validation_result: Dict[str, Any]
 
-# --- LLM Setup ---
-MODEL_NAME = "openai/gpt-oss-20b:free"
-
-def create_llm(model_name: str, bind_tools: bool = False) -> ChatOpenAI:
-    """Create LLM instance"""
-    logger.info(f"Initializing LLM: {model_name}")
-    llm = ChatOpenAI(
-        model_name=model_name,
-        base_url="https://openrouter.ai/api/v1",
-        temperature=0.5,
-        openai_api_key=os.getenv("OPENROUTER_API_KEY"),
-        max_retries=2
-    )
-    return llm.bind_tools(tools) if bind_tools else llm
-
-intent_llm = create_llm(MODEL_NAME, bind_tools=False)
-execution_llm = create_llm(MODEL_NAME, bind_tools=True)
 
 # --- Node Functions ---
 async def intent_parser_node(state: AgentState) -> AgentState:
@@ -80,7 +89,7 @@ async def intent_parser_node(state: AgentState) -> AgentState:
     logger.info(f"\n{'='*60}\nINTENT PARSER: {goal}\n{'='*60}")
     
     try:
-        structured_llm = intent_llm.with_structured_output(IntentParseResult)
+        structured_llm = llm.with_structured_output(IntentParseResult)
         messages = [
             SystemMessage(content=get_prompt("intent_system_prompt")),
             HumanMessage(content=f"User goal: {goal}")
@@ -90,9 +99,9 @@ async def intent_parser_node(state: AgentState) -> AgentState:
         
         state["high_level_goal"] = parsed.high_level_goal
         state["current_plan"] = [action.step_description for action in parsed.actions]
+        state["initial_step"] = parsed.initial_step
         state["steps"] = 0
         state["parsed_actions"] = parsed.actions
-        
         logger.info(f" Parsed {len(parsed.actions)} actions (confidence: {parsed.confidence:.2f})")
         logger.info(f" Plan: {'  '.join(state['current_plan'])}")
         print("parsed:::", parsed)
@@ -104,6 +113,152 @@ async def intent_parser_node(state: AgentState) -> AgentState:
         state["last_action"] = "intent_parse_failed"
         state["task_complete"] = False
         return state
+    
+class PageDecisionResult(BaseModel):
+    decision: Literal["read_page", "navigate", "finish"]
+    reason: str
+    confidence: float = Field(..., ge=0.0, le=1.0)
+
+async def decide_read_or_navigate_node(state: AgentState) -> AgentState:
+    """
+    Decide whether to read the current page or navigate to a new one.
+    """
+    logger.info(f"\n{'='*60}\nDECIDE READ VS NAVIGATE\n{'='*60}")
+
+    plan = state.get("current_plan", [])
+    steps = state.get("steps", 0)
+    page_content = state.get("page_content")
+    last_action = state.get("last_action")
+
+    # Hard stops
+    if not plan or steps >= state.get("max_steps", 10):
+        state["decision"] = "finish"
+        return state
+
+    current_step = plan[0].lower()
+
+    # Heuristic routing (fast + cheap)
+    if any(k in current_step for k in ["read", "extract", "analyze", "scrape"]):
+        state["decision"] = "read_page"
+        state["decision_reason"] = "Current plan step requires reading page content"
+        return state
+
+    if any(k in current_step for k in ["navigate", "open", "go to", "search"]):
+        state["decision"] = "navigate"
+        state["decision_reason"] = "Current plan step requires navigation"
+        return state
+
+    # Fallback: use LLM if ambiguous
+    structured_llm = llm_tools.with_structured_output(PageDecisionResult)
+
+    messages = [
+        SystemMessage(
+            content=(
+                "You are deciding the next browser action.\n"
+                "Choose 'read_page' if current page content is sufficient.\n"
+                "Choose 'navigate' if a new page is needed.\n"
+                "Choose 'finish' if task is complete."
+            )
+        ),
+        HumanMessage(
+            content=f"""
+High-level goal: {state.get("high_level_goal")}
+Current step: {current_step}
+Has page content: {bool(page_content)}
+Last action: {last_action}
+"""
+        ),
+    ]
+
+    result = await structured_llm.ainvoke(messages)
+
+    state["decision"] = result.decision
+    state["decision_reason"] = result.reason
+    state["decision_confidence"] = result.confidence
+
+    return state
+
+async def read_page_node(state: AgentState) -> AgentState:
+    """
+    Read and store current page content.
+    """
+    logger.info(f"\n{'='*60}\nREAD PAGE NODE\n{'='*60}")
+
+    browser = get_browser()
+
+    try:
+        page_text = await browser.read()  # or read_dom(), read_text(), etc.
+        current_step = state.get("current_plan", [])[0] if state.get("current_plan") else "N/A"
+        last_action = state.get("last_action", "N/A")
+        messages = [
+            SystemMessage(
+                content=(
+                    "You are deciding the next browser action.\n"
+                    "Choose 'read_page' if current page content is sufficient.\n"
+                    "Choose 'navigate' if a new page is needed.\n"
+                    "Choose 'finish' if task is complete."
+                )
+            ),
+            HumanMessage(
+                content=f"""
+    Current step: {current_step}
+    Has page content: {page_text}
+    Last action: {last_action}
+    """
+            ),
+        ]
+
+        useful_page_content = await llm.ainvoke(messages)
+
+        state["last_action"] = "read_page"
+        state["steps"] += 1
+
+        # Remove completed step
+        if state.get("current_plan"):
+            state["current_plan"] = state["current_plan"][1:]
+
+        state.setdefault("all_actions", []).append("read_page")
+
+    except Exception as e:
+        logger.exception(f"Read page failed: {e}")
+        state["last_action"] = "read_failed"
+
+    return state
+
+async def navigate_node(state: AgentState) -> AgentState:
+    """
+    Navigate to a new page based on the current plan step.
+    """
+    logger.info(f"\n{'='*60}\nNAVIGATE NODE\n{'='*60}")
+
+    browser = get_browser()
+    plan = state.get("current_plan", [])
+
+    if not plan:
+        state["last_action"] = "no_navigation_needed"
+        return state
+
+    step = plan[0]
+
+    try:
+        await browser.navigate(step)
+        state["last_action"] = "navigate"
+        state["steps"] += 1
+
+        # Clear stale page content
+        state["page_content"] = ""
+
+        # Remove completed step
+        state["current_plan"] = plan[1:]
+
+        state.setdefault("all_actions", []).append(f"navigate: {step}")
+
+    except Exception as e:
+        logger.exception(f"Navigation failed: {e}")
+        state["last_action"] = "navigate_failed"
+
+    return state
+
 
 def create_agent_graph(max_steps: int = 10) -> StateGraph:
     """Create graph with intelligent routing"""

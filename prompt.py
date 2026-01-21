@@ -93,8 +93,7 @@ For every task:
 
 2. **Task Decomposition**
    - Convert the request into a numbered list of browser actions.
-   - Each action should map to one of the available tools.
-
+   
 3. **Execution Phase**
    - Execute steps sequentially.
    - After every navigation or click, use `read_page` to understand the current page.
@@ -116,28 +115,17 @@ For every task:
 - Do not output anything after `finish_task`.
 
 === SCHEMA YOU MUST FOLLOW ===
-
-IntentParseResult:
 IntentParseResult:
 {
-  "high_level_goal": string,
   "actions": [
     {
       "step_description": string
     }
   ],
-  "confidence": number
+  "current_step": [string],
+  "confidence": number,
+  "high_level_goal": string,
 }
-=== EXPECTED INTERNAL PLAN (DO NOT OUTPUT THIS) ===
-1. Navigate to bbc.com
-2. Locate and access the Technology section
-3. Read the list of latest articles
-4. Click into each relevant article if needed
-5. Extract headlines and summaries
-6. Finish task with compiled summaries
-
-Now execute the task.
-
 """
 
 
