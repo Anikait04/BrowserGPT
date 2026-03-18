@@ -4,7 +4,6 @@ from dotenv import load_dotenv
 from typing import TypedDict, Sequence, Annotated, List, Dict, Any, Optional
 from typing import TypedDict, Literal
 from langchain_openai import ChatOpenAI
-from openai import LengthFinishReasonError
 from langchain_core.messages import (
     BaseMessage,
     HumanMessage,
@@ -24,7 +23,7 @@ from logs import logger, log_separator
 load_dotenv()
 
 MODEL_NAME = "openai/gpt-oss-20b:free"
-_PAGE_CACHE: Dict[str, str] = {}
+
 # ---------------------------------------------------------------------
 # LLM
 # ---------------------------------------------------------------------
@@ -35,7 +34,6 @@ llm = ChatOpenAI(
         temperature=0.0,
         openai_api_key=os.getenv("OPENROUTER_API_KEY"),
         max_retries=2,
-        max_tokens=512,
     )
 llm_tools=ChatOpenAI(
         model_name=MODEL_NAME,
@@ -43,7 +41,6 @@ llm_tools=ChatOpenAI(
         temperature=0.0,
         openai_api_key=os.getenv("OPENROUTER_API_KEY"),
         max_retries=2,
-        max_tokens=512,
     ).bind_tools(tools)
 
 # ---------------------------------------------------------------------
@@ -60,23 +57,29 @@ class AgentState(TypedDict):
     current_plan_step: int
     agent_router: str
     messages: Annotated[Sequence[BaseMessage], "Conversation history"]
-    agent_decision:str
+    agent_decision:AgentDecision
     steps: int
     max_steps: int
     last_action: str
+
     current_url: str
+    page_content: str
+
     dom_candidates: List[Dict[str, Any]]
     chosen_element: Optional[Dict[str, Any]]
+
     all_actions: List[str]
     visited: set
+    
     needs_interaction: bool
 
 # ---------------------------------------------------------------------
 # Planner
 # ---------------------------------------------------------------------
 class PlanOutput(BaseModel):
-    plan: List[str] = Field(description="Ordered list of high-level browser actions")
-    message: str = Field(...,description="Short description of the action taken by the agent")
+    plan: List[str] = Field(
+        description="Ordered list of high-level browser actions"
+    )
 async def planner_node(state: AgentState):
     logger.info("Planning high-level steps")
 
@@ -90,7 +93,6 @@ async def planner_node(state: AgentState):
             HumanMessage(content=f"Goal: {state['goal']}"),
         ]
     )
-    print("planner_node result:::::", result)
     state["plan"]=result.plan
     state["current_plan_step"]=0
     state["messages"]=state["messages"] + [result]
@@ -98,7 +100,9 @@ async def planner_node(state: AgentState):
 
     return state
 
-
+# ---------------------------------------------------------------------
+# Agent (handles ALL interactions via tool calls)
+# ---------------------------------------------------------------------
 from typing import TypedDict, Literal
 
 
@@ -115,12 +119,13 @@ async def agent_node(state: AgentState):
             "last_action": "max_steps_reached",
             "steps": state["steps"] + 1,
         }
+
     plan_step = (
-        state["entire_plan"][state["current_plan_step"]]
-        if state["current_plan_step"] < len(state["entire_plan"])
+        state["plan"][state["current_plan_step"]]
+        if state["current_plan_step"] < len(state["plan"])
         else "Finish the task"
     )
-    state["current_step"]=plan_step
+
     elements_info = ""
     if state.get("dom_candidates"):
         elements_info = "\n\nAVAILABLE INTERACTIVE ELEMENTS:\n"
@@ -151,34 +156,27 @@ STATUS:
 
 {chosen_info}
 {elements_info}
-""" 
+
+PAGE PREVIEW:
+{state['page_content'][:800]}
+"""
     structured_llm=llm.with_structured_output(AgentDecision)
-    try:
-        response = await structured_llm.ainvoke(
-            [
-                SystemMessage(content=get_prompt("navigate_prompt")),
-                HumanMessage(content=user_prompt),
-            ]
-        )
-    except LengthFinishReasonError:
-        logger.warning(
-            "Structured decision exceeded token length. Falling back to read_page."
-        )
-        response = {
-            "route_decision": "read_page",
-            "tool_name": "",
-            "tool_input": "",
-            "message": "Fallback after overlong model response",
-        }
+    response = await structured_llm.ainvoke(
+        [
+            SystemMessage(content=get_prompt("navigate_prompt")),
+            HumanMessage(content=user_prompt),
+        ]
+    )
 
     try:
         decision = response
         print("agent_node:::::", decision)
         yo={
         **state,
-        # "messages": state["messages"] + [response],
+        "messages": state["messages"] + [response],
         "agent_decision": decision,
         "steps": state["steps"] + 1,
+        "chosen_element": None,
     }
         print("agent_node state:::::", state)
     except Exception as e:
@@ -190,76 +188,32 @@ STATUS:
 # Tool execution
 # ---------------------------------------------------------------------
 
-from langchain_core.messages import AIMessage, ToolMessage
-from langgraph.prebuilt import ToolNode
-
 async def tool_execution_node(state: AgentState):
-    decision = state.get("agent_decision")
+    decision = state["agent_decision"]
 
-    # -------------------------
-    # Guard
-    # -------------------------
-    if not decision or decision.get("route_decision") != "tools":
+    # Guard: no tool requested
+    if decision.get("route_decision") != "tools":
         return state
 
-    tool_name = decision.get("tool_name")
-    tool_input = decision.get("tool_input")
-
-    if not tool_name:
+    tool_calls = decision.get("tools")
+    if not tool_calls:
         return state
-
-    # -------------------------
-    # 🔧 Build LangChain-style tool call
-    # -------------------------
-    # ToolNode expects args to be a DICT, not a string
-    if tool_name == "navigate":
-        args = {"url": tool_input}
-    elif tool_name == "type_text":
-        chosen = state.get("chosen_element") or {}
-        selector = chosen.get("selector")
-        if not selector:
-            logger.warning(
-                "type_text requested but no chosen selector available; skipping tool call."
-            )
-            return {
-                **state,
-                "last_action": "type_text_skipped_no_selector",
-                "needs_interaction": False,
-            }
-        args = {"selector_and_text": f"{selector}|{tool_input}"}
-    else:
-        args = {"value": tool_input}
-
-    ai_message = AIMessage(
-        content="",
-        tool_calls=[
-            {
-                "id": "tool_call_1",
-                "name": tool_name,
-                "args": args,
-            }
-        ],
-    )
 
     tool_node = ToolNode(tools)
 
-    # -------------------------
     # Execute tool
-    # -------------------------
     result = await tool_node.ainvoke(
-        {"messages": state["messages"] + [ai_message]}
+        {"messages": state["messages"] + [decision]}
     )
-
     print("tool_execution_node:::::", result)
-
     tool_msg: ToolMessage = result["messages"][-1]
+    tool_name = tool_calls[0]["name"]
 
-    # -------------------------
-    # Build next state
-    # -------------------------
+    # Generic state updates
+    print("tool_execution_node state:::::", state)
     next_state = {
         **state,
-        "messages": state["messages"] + [ai_message] + result["messages"],
+        "messages": state["messages"] + result["messages"],
         "last_action": tool_name,
         "needs_interaction": tool_name in {
             "navigate",
@@ -268,44 +222,32 @@ async def tool_execution_node(state: AgentState):
             "scroll",
         },
     }
-
-    # -------------------------
-    # Deterministic URL update
-    # -------------------------
-    if tool_name == "navigate" and tool_input:
-        next_state["current_url"] = tool_input
-
-    # -------------------------
-    # Optional metadata updates
-    # -------------------------
-    if hasattr(tool_msg, "metadata") and tool_msg.metadata:
-        if "current_url" in tool_msg.metadata:
-            next_state["current_url"] = tool_msg.metadata["current_url"]
-    # -------------------------
-    # Fallback content
-    # -------------------------
-    if tool_name == "navigate" and isinstance(tool_msg.content, str):
-        url = next_state.get("current_url")
+    print("tool_execution_node state:::::", state)
+    # Update URL ONLY if tool exposes it explicitly
+    if hasattr(tool_msg, "metadata"):
+        url = tool_msg.metadata.get("current_url")
         if url:
-            _PAGE_CACHE[url] = tool_msg.content
-    return next_state
+            next_state["current_url"] = url
 
+    return next_state
 
 # ---------------------------------------------------------------------
 # Read page
 # ---------------------------------------------------------------------
 
 async def read_page_node(state: AgentState):
+    """Reads the current page content after navigation or interaction"""
     browser = await get_browser()
     page_content = await browser.read()
+    
+    logger.info("Page content read")
+    
+    return {
+        **state,
+        "page_content": page_content,
+        "needs_interaction": False,
+    }
 
-    # cache by URL
-    if state.get("current_url"):
-        _PAGE_CACHE[state["current_url"]] = page_content
-
-    logger.info("Page content read and cached")
-
-    return state
 # ---------------------------------------------------------------------
 # DOM extractor - IMPROVED
 # ---------------------------------------------------------------------
@@ -344,145 +286,100 @@ async def extract_dom_node(state: AgentState):
 
     candidates = []
     idx = 1
-    MAX_TEXT = 100
-    MAX_LINKS = 25
 
-    async def is_visible(el):
-        try:
-            return await el.is_visible()
-        except Exception:
-            return False
-
-    async def safe_text(el):
-        try:
-            return (await el.inner_text()).strip()
-        except Exception:
-            return ""
-
-    async def dom_context(el):
-        try:
-            return await el.evaluate("""
-                e => {
-                    let ctx = [];
-                    let p = e.parentElement;
-                    let depth = 0;
-                    while (p && depth < 3) {
-                        if (p.tagName === 'NAV') ctx.push('nav');
-                        if (p.tagName === 'FOOTER') ctx.push('footer');
-                        if (p.getAttribute('role')) ctx.push(p.getAttribute('role'));
-                        if (p.className && typeof p.className === 'string') {
-                            ctx.push(p.className.split(' ')[0]);
-                        }
-                        p = p.parentElement;
-                        depth++;
-                    }
-                    return ctx.join(' > ');
-                }
-            """)
-        except Exception:
-            return ""
-
-    async def build_candidate(el, el_type: str):
-        nonlocal idx
-
-        label = (
-            await el.get_attribute("aria-label")
-            or await el.get_attribute("placeholder")
-            or await el.get_attribute("name")
-            or await safe_text(el)
-        )
-
-        if not label:
-            return None
-
-        label = " ".join(label.split())
-        if len(label) > MAX_TEXT:
-            label = label[:MAX_TEXT] + "…"
-
-        href = await el.get_attribute("href")
-        selector = (
-            f"a[href='{href}']"
-            if el_type == "link" and href
-            else await get_stable_selector(el)
-        )
-
-        candidate = {
-            "id": idx,
-            "type": el_type,
-            "label": label,
-            "selector": selector,
-            "href": href,
-            "context": await dom_context(el),
-        }
-
-        # dropdown detection
-        aria_controls = await el.get_attribute("aria-controls")
-        if aria_controls:
-            candidate["dropdown"] = True
-            candidate["controls"] = aria_controls
-            candidate["expanded"] = await el.get_attribute("aria-expanded")
-
-        idx += 1
-        return candidate
-
-    # ---------------- INPUTS ----------------
+    # Inputs (only if not already filled)
     for el in await page.locator("input, textarea").all():
         try:
-            if not await is_visible(el):
+            if not await el.is_visible():
                 continue
-
+            
+            # Skip if already has value (search already done)
             value = await el.input_value()
-            if value:
+            if value and len(value) > 0:
                 continue
-
-            c = await build_candidate(el, "input")
-            if c:
-                candidates.append(c)
+                
+            selector = await get_stable_selector(el)
+            label = await el.get_attribute("aria-label") or await el.get_attribute("placeholder") or ""
+            name = await el.get_attribute("name") or ""
+            
+            candidates.append({
+                "id": idx,
+                "type": "input",
+                "label": label or name or "input field",
+                "selector": selector,
+            })
+            idx += 1
         except Exception:
             pass
 
-    # ---------------- BUTTONS ----------------
-    for el in await page.locator("button, [role='button'], [onclick]").all():
+    # Buttons
+    for el in await page.locator("button,[role='button']").all():
         try:
-            if not await is_visible(el):
+            if not await el.is_visible():
                 continue
-
-            text = await safe_text(el)
-            if not text:
+            text = (await el.inner_text()).strip()
+            if not text or len(text) > 100:  # Skip very long text
                 continue
-
-            c = await build_candidate(el, "button")
-            if c:
-                candidates.append(c)
+            selector = await get_stable_selector(el)
+            candidates.append({
+                "id": idx,
+                "type": "button",
+                "label": text,
+                "selector": selector,
+            })
+            idx += 1
         except Exception:
             pass
 
-    # ---------------- LINKS ----------------
+    # Links - prioritize video links on YouTube
     link_count = 0
-    for el in await page.locator("a[href]").all():
+    for el in await page.locator("a").all():
         try:
-            if link_count >= MAX_LINKS:
+            if link_count >= 20:  # Limit total links
                 break
-
-            if not await is_visible(el):
+                
+            if not await el.is_visible():
                 continue
-
-            text = await safe_text(el)
-            aria = await el.get_attribute("aria-label")
-            href = await el.get_attribute("href")
-
-            if not href or not (text or aria):
+            
+            text = (await el.inner_text()).strip()
+            href = await el.get_attribute("href") or ""
+            aria_label = await el.get_attribute("aria-label") or ""
+            
+            if not (text or aria_label) or not href:
                 continue
-
-            c = await build_candidate(el, "link")
-            if c:
-                candidates.append(c)
+            
+            # Prioritize video links on YouTube
+            if "/watch?" in href and "youtube.com" in state.get("current_url", ""):
+                # This is a video link
+                display_text = aria_label if aria_label else text
+                if len(display_text) > 100:
+                    display_text = display_text[:100] + "..."
+                
+                # Use aria-label as selector since it's unique
+                if aria_label:
+                    candidates.append({
+                        "id": idx,
+                        "type": "link",
+                        "label": display_text,
+                        "selector": f"a[aria-label='{aria_label}']",
+                    })
+                    idx += 1
+                    link_count += 1
+            elif text and href and len(text) < 100:
+                # Regular link
+                candidates.append({
+                    "id": idx,
+                    "type": "link",
+                    "label": text[:100],
+                    "selector": f"a[href='{href}']" if href.startswith("/") else "a",
+                })
+                idx += 1
                 link_count += 1
         except Exception:
             pass
 
     logger.info(f"Extracted {len(candidates)} interactive elements")
-
+    
     return {
         **state,
         "dom_candidates": candidates,
@@ -579,20 +476,10 @@ async def verifier_node(state: AgentState):
         if state["current_plan_step"] < len(state["plan"])
         else "Complete the task"
     )
-
-    # ----------------------------------
-    # Read page preview from cache
-    # ----------------------------------
-    page_preview = ""
-    current_url = state.get("current_url")
-    if current_url and current_url in _PAGE_CACHE:
-        page_preview = _PAGE_CACHE[current_url][:600]
-
+    
     verdict = await llm.ainvoke(
         [
-            SystemMessage(
-                content="Answer only 'yes' or 'no'. Be strict — only say yes if real progress was made."
-            ),
+            SystemMessage(content="Answer only 'yes' or 'no'. Be strict - only say yes if real progress was made."),
             HumanMessage(
                 content=f"""
 GOAL: {state['goal']}
@@ -601,46 +488,41 @@ CURRENT PLAN STEP: {plan_step}
 
 LAST ACTION: {state['last_action']}
 
-CURRENT URL: {current_url}
+CURRENT URL: {state['current_url']}
 
 PAGE PREVIEW:
-{page_preview}
+{state['page_content'][:600]}
 
 Did the last action successfully complete or make progress on the current plan step?
 
 Examples:
 - If step is "search for X" and search was performed → yes
-- If step is "click video" and video page opened → yes
+- If step is "click video" and video page opened → yes  
 - If step is "search" but search was done again → no (redundant)
 - If an error occurred → no
 """
             ),
         ]
     )
-
+    
     verdict_text = verdict.content.lower().strip()
-    logger.info(f"verifier_node verdict: {verdict_text}")
-
-    # ----------------------------------
-    # Handle verdict
-    # ----------------------------------
-    if verdict_text.startswith("yes"):
-        next_step = state["current_plan_step"] + 1
-
-        logger.info(
-            f"Plan step {state['current_plan_step']} completed, moving to step {next_step}"
-        )
-
+    print("verifier_node:::::", verdict_text)
+    
+    if "yes" in verdict_text:
+        # Success: move to next plan step
+        new_step = min(state["current_plan_step"] + 1, len(state["plan"]))
+        logger.info(f"Plan step {state['current_plan_step']} completed, moving to step {new_step}")
         return {
             **state,
-            "current_plan_step": next_step,
+            "current_plan_step": new_step,
+        }
+    else:
+        # Failure: don't advance plan, but increment step counter
+        logger.info(f"Plan step {state['current_plan_step']} not completed, retrying")
+        return {
+            **state,
         }
 
-    # Failure → retry same plan step
-    logger.info(
-        f"Plan step {state['current_plan_step']} not completed, retrying"
-    )
-    return state
 # ---------------------------------------------------------------------
 # Routers
 # ---------------------------------------------------------------------
@@ -743,6 +625,7 @@ async def run_agent(goal: str, max_steps: int = 30):
         "max_steps": max_steps,
         "last_action": "none",
         "current_url": "",
+        "page_content": "",
         "dom_candidates": [],
         "chosen_element": None,
         "all_actions": [],
@@ -754,8 +637,7 @@ async def run_agent(goal: str, max_steps: int = 30):
         async for _ in app.astream(state, stream_mode="values"):
             print("\n" + "="*80)
             print("FULL STATE AFTER STEP")
-            print("=======", _, "===========")
-            # pass  
+            print(state)
     finally:
         browser = await get_browser()
         await browser.close()

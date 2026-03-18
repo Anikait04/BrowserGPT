@@ -6,3 +6,5 @@ agent_flow.png
 /logs
 /success_prev_run
 agent_flow_ipynb.png
+test.ipynb
+.vscode

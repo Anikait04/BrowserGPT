@@ -1,7 +1,7 @@
 import asyncio
 import os
 
-from agent import run_agent
+from agent_v3 import run_agent
 from logs import logger, log_separator
 
 
@@ -13,7 +13,6 @@ async def main():
     # Check for OpenRouter API Key
     if not os.getenv("OPENROUTER_API_KEY"):
         logger.error("OPENROUTER_API_KEY not found in .env file")
-        return
 
     logger.info("OPENROUTER_API_KEY detected successfully")
 

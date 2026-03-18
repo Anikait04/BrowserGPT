@@ -54,20 +54,27 @@ class Browser:
         """Click an element by CSS selector"""
         try:
             logger.info(f"Attempting to click: {selector}")
-            
-            await self.page.wait_for_selector(selector, state="visible", timeout=10000)
-            await self.page.locator(selector).scroll_into_view_if_needed()
+
+            # Use first match to avoid strict mode violation
+            locator = self.page.locator(selector).first
+
+            await locator.wait_for(state="visible", timeout=10000)
+            await locator.scroll_into_view_if_needed()
             await asyncio.sleep(0.3)
-            
+
             try:
-                await self.page.click(selector, timeout=5000)
+                await locator.click(timeout=5000)
             except Exception:
-                await self.page.locator(selector).click(force=True)
-            
+                await locator.click(force=True)
+
             await asyncio.sleep(0.8)
             logger.info(f"Clicked: {selector}")
             return f"Successfully clicked element: {selector}"
-        
+
+        except Exception as e:
+            logger.error(f"Click error on selector: {selector}")
+            return f"Click error: {selector}"
+            
         except PlaywrightTimeoutError:
             alternatives = self._get_alternative_selectors(selector)
             for alt in alternatives:

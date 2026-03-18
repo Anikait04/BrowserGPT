@@ -35,25 +35,24 @@ async def read_page(dummy: str = "") -> str:
     return content
 
 
-@tool
-async def type_text(selector_and_text: str) -> str:
-    """Type text into an input field or textarea."""
-    logger.info(f"type_text called with input: {selector_and_text}")
-    browser = await get_browser()
-    
-    parts = selector_and_text.split("|")
-    if len(parts) < 2:
-        logger.error("type_text error: invalid format")
-        return "Error: Format must be 'selector|text' or 'selector|text|enter'"
-    
-    selector = parts[0].strip()
-    text = parts[1].strip()
-    press_enter = len(parts) > 2 and parts[2].strip().lower() == 'enter'
+from pydantic import BaseModel
 
-    result = await browser.type(selector, text, press_enter=press_enter)
+class TypeTextInput(BaseModel):
+    selector: str
+    value: str
+    press_enter: bool = False
+
+
+@tool(args_schema=TypeTextInput)
+async def type_text(selector: str, value: str, press_enter: bool = False) -> str:
+    """Type text into an input field or textarea."""
+    logger.info(f"type_text called with selector={selector}, value={value}, press_enter={press_enter}")
+    
+    browser = await get_browser()
+    result = await browser.type(selector, value, press_enter=press_enter)
+    
     logger.info(f"type_text result: {result}")
     return result
-
 
 @tool
 async def click_element(selector: str) -> str:
@@ -100,10 +99,8 @@ async def finish_task(summary: str = "Task completed") -> str:
 # Export all tools
 tools = [
     navigate,
-    read_page,
-    type_text,
     click_element,
-    take_screenshot,
-    wait_seconds,
+    type_text,
+    read_page,
     finish_task
 ]
