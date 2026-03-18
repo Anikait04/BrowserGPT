@@ -3,7 +3,7 @@ import uuid
 from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage,AIMessage, SystemMessage, SystemMessage,ToolMessage
 from workflow.agent_state import AgentState
-from utils import plan_steps_update
+from workflow.utils import plan_steps_update
 from workflow.browsertools import tools, get_browser
 from workflow.prompt import get_prompt
 from logs import logger
@@ -11,7 +11,7 @@ from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.prebuilt import ToolNode
 from workflow.structured import AgentDecision, PlanOutput
 import re
-from utils import plan_steps_update
+from workflow.utils import plan_steps_update
 from config import _PAGE_CACHE
 from workflow.llm import llm_call
 load_dotenv()
