@@ -1,79 +1,32 @@
-import os
-import asyncio
+
 import uuid
 from dotenv import load_dotenv
-from typing import TypedDict, Sequence, Annotated, List, Dict, Any, Optional
-from typing import TypedDict, Literal
-from langchain_openai import ChatOpenAI
-from langchain_core.messages import (
-    BaseMessage,
-    HumanMessage,
-    AIMessage,
-    SystemMessage,
-    ToolMessage,
-)
-from utils import plan_steps_update
-from pydantic import BaseModel, Field
-from typing import List
-from langgraph.graph import StateGraph, END
-from langgraph.prebuilt import ToolNode
-from langchain_ollama import ChatOllama
-from browsertools import tools, get_browser
-from prompt import get_prompt
-from logs import logger, log_separator
+from langchain_core.messages import HumanMessage,AIMessage, SystemMessage, SystemMessage,ToolMessage
+from src.workflow.agent_state import AgentState
+from src.workflow.utils import plan_steps_update
+from src.workflow.browsertools import tools, get_browser
+from src.workflow.prompt import get_prompt
+from logs import logger
 from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.prebuilt import ToolNode
-from structured import AgentDecision, PlanOutput
+from src.workflow.structured import AgentDecision, PlanOutput
 import re
-from utils import plan_steps_update
+from src.workflow.utils import plan_steps_update
+from config import _PAGE_CACHE
+from src.workflow.llm import llm_call
 load_dotenv()
-
-MODEL_NAME = "openai/gpt-oss-20b:free"
-_PAGE_CACHE: Dict[str, str] = {}
-
-
-# llm = ChatOpenAI(
-#         model_name=MODEL_NAME,
-#         base_url="https://openrouter.ai/api/v1",
-#         temperature=0.0,
-#         openai_api_key=os.getenv("OPENROUTER_API_KEY"),
-#         max_retries=2,
-#     )
-llm = ChatOllama(
-    model="gpt-oss:120b-cloud",
-    temperature=0,
-    max_retries=2,
-    model_kwargs={"format": "json"}
-)
-
-class AgentState(TypedDict):
-    goal: str
-    entire_plan: List[str]
-    step_count: int
-    current_action:str
-    agent_decision:str
-    steps: int
-    max_steps: int
-    progress_verification: str
-    last_action: str
-    current_url: str
-    tool_name:str
-    tool_input:str
-    element_id:int
-    messages: Annotated[Sequence[BaseMessage], "node remarks messages exchanged so far"]
-    chosen_element:List[str]
-    
-
 
 
 async def planner_node(state: AgentState):
-    logger.info("Planning high-level steps")
+    logger.info("Planning high-level steps") 
+    llm=llm_call()
     prompt = get_prompt("planner_prompt")
     structured_llm = llm.with_structured_output(PlanOutput)
     result= await structured_llm.ainvoke([
             SystemMessage(content=prompt),
             HumanMessage(content=f"Goal: {state['goal']}"),
         ])
+    print("planner result:::",result)
     return {
         **state,
         "entire_plan": result.plan,
@@ -83,6 +36,8 @@ async def planner_node(state: AgentState):
 
 async def agent_node(state: AgentState):
     logger.info("Started Agent Node")
+
+    llm=llm_call()
     if state["steps"] >= state["max_steps"]:
         return {
             **state,
@@ -124,6 +79,7 @@ async def agent_node(state: AgentState):
             HumanMessage(content=user_prompt),
         ]
     )
+    print("agent_node response:::",response)
     existing_messages = state.get("messages", [])
     if not isinstance(existing_messages, list):
         existing_messages = [existing_messages]
@@ -309,12 +265,13 @@ async def observe_and_choose_node(state: AgentState):
             if c:
                 elements.append(c)
     labels_text = "\n".join(f"- {c['label']}" for c in elements)
-    with open("label.txt", "w",encoding="utf-8") as f:
-        f.write(labels_text)
+    # with open("label.txt", "w",encoding="utf-8") as f:
+    #     f.write(labels_text)
     
     plan_step = state.get("current_action", "")
     PROMPTY=get_prompt("choose_and_observe_prompt")
     # print("elements::::",elements)
+    llm=llm_call()
     response = await llm.ainvoke(
         [
             SystemMessage(content=PROMPTY),
@@ -329,7 +286,6 @@ async def observe_and_choose_node(state: AgentState):
             ),
         ]
     )
-
     chosen_label = response.content.strip()
     print("chosen_label",chosen_label)
 
@@ -360,8 +316,8 @@ async def observe_and_choose_node(state: AgentState):
             s += 2
 
         return s
-    with open("elements.txt", "w",encoding="utf-8") as f:
-        f.write(str(elements))
+    # with open("elements.txt", "w",encoding="utf-8") as f:
+    #     f.write(str(elements))
     ranked = sorted(elements, key=score, reverse=True)
 
     top_5 = ranked[:20]
@@ -379,6 +335,7 @@ async def observe_and_choose_node(state: AgentState):
 
 async def verifier_node(state: AgentState):
     logger.info("Started Verifier Node")
+    llm=llm_call()
     plan_step = state.get("current_action", "")
 
     # page_preview = ""
@@ -448,114 +405,3 @@ Examples:
         **state,
         "progress_verification": verification
     }
-# ---------------------------------------------------------------------
-# Routers
-# ---------------------------------------------------------------------
-
-def agent_router(state: AgentState):
-    route = state["agent_decision"]
-    # 1. Explicit finish
-    if route == "finish":
-        return END
-
-    # 2. Step budget exhausted
-    if state["steps"] >= state["max_steps"]:
-        return END
-
-    # 3. Tool execution
-    if route == "tools":
-        return "tools"
-
-    # 4. Page read
-    if route == "read_page":
-        return "read_page"
-
-    # 5. Controlled loop
-    if route == "wait":
-        return "agent"
-
-    # Safety fallback (should never happen)
-    return END
-
-def tool_router(state: AgentState):
-    return "verifier"
-
-# ---------------------------------------------------------------------
-# Graph
-# ---------------------------------------------------------------------
-
-graph = StateGraph(AgentState)
-
-graph.add_node("planner", planner_node)
-graph.add_node("agent", agent_node)
-graph.add_node("tools", tool_execution_node)
-graph.add_node("read_page", observe_and_choose_node)
-graph.add_node("verifier", verifier_node)
-
-# Entry
-graph.set_entry_point("planner")
-graph.add_edge("planner", "agent")
-
-# agent → tools | read_page | agent | END
-graph.add_conditional_edges(
-    "agent",
-    agent_router,
-    {
-        "tools": "tools",
-        "read_page": "read_page",
-        "agent": "agent",
-        END: END,
-    },
-)
-
-# tools → verify
-graph.add_edge("tools", "verifier")
-
-# verifier → agent
-graph.add_edge("verifier", "agent")
-# read_page → extract_dom → choose_element → agent
-graph.add_edge("read_page", "agent")
-
-app = graph.compile()
-try:
-    png_bytes = app.get_graph().draw_mermaid_png()
-    with open("agent_flow.png", "wb") as f:
-        f.write(png_bytes)
-except Exception as e:
-    logger.warning(f"Could not generate graph PNG: {e}")
-
-# ---------------------------------------------------------------------
-# Runner
-# ---------------------------------------------------------------------
-
-async def run_agent(goal: str, max_steps: int = 30):
-    log_separator("AGENT RUN START")
-
-    state: AgentState = {
-        "goal": goal,
-        "entire_plan": [],
-        "step_count": 0,
-        "current_action":"",
-        "agent_decision": "",
-        "steps": 0,
-        "progress_verification":"",
-        "max_steps": max_steps,
-        "last_action": "none",
-        "current_url": "",
-        "chosen_element": [],
-        "tool_name": "",
-        "tool_input": "",
-        "tool_selector": "",
-        "messages": []
-    }
-
-    try:
-        async for _ in app.astream(state, stream_mode="values"):
-            # print("\n" + "="*80)
-            # print("FULL STATE AFTER STEP")
-            # print("=======", _, "===========")
-            pass  
-    finally:
-        browser = await get_browser()
-        await browser.close()
-        log_separator("AGENT RUN END")
