@@ -1,5 +1,5 @@
 from langchain.tools import tool
-from workflow.browserplugin import Browser
+from src.workflow.browserplugin import Browser
 from logs import logger
 
 _browser_instance = None

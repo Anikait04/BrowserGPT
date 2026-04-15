@@ -2,30 +2,31 @@
 import uuid
 from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage,AIMessage, SystemMessage, SystemMessage,ToolMessage
-from workflow.agent_state import AgentState
-from workflow.utils import plan_steps_update
-from workflow.browsertools import tools, get_browser
-from workflow.prompt import get_prompt
+from src.workflow.agent_state import AgentState
+from src.workflow.utils import plan_steps_update
+from src.workflow.browsertools import tools, get_browser
+from src.workflow.prompt import get_prompt
 from logs import logger
 from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.prebuilt import ToolNode
-from workflow.structured import AgentDecision, PlanOutput
+from src.workflow.structured import AgentDecision, PlanOutput
 import re
-from workflow.utils import plan_steps_update
+from src.workflow.utils import plan_steps_update
 from config import _PAGE_CACHE
-from workflow.llm import llm_call
+from src.workflow.llm import llm_call
 load_dotenv()
 
-llm=llm_call()
 
 async def planner_node(state: AgentState):
-    logger.info("Planning high-level steps")
+    logger.info("Planning high-level steps") 
+    llm=llm_call()
     prompt = get_prompt("planner_prompt")
     structured_llm = llm.with_structured_output(PlanOutput)
     result= await structured_llm.ainvoke([
             SystemMessage(content=prompt),
             HumanMessage(content=f"Goal: {state['goal']}"),
         ])
+    print("planner result:::",result)
     return {
         **state,
         "entire_plan": result.plan,
@@ -35,6 +36,8 @@ async def planner_node(state: AgentState):
 
 async def agent_node(state: AgentState):
     logger.info("Started Agent Node")
+
+    llm=llm_call()
     if state["steps"] >= state["max_steps"]:
         return {
             **state,
@@ -76,6 +79,7 @@ async def agent_node(state: AgentState):
             HumanMessage(content=user_prompt),
         ]
     )
+    print("agent_node response:::",response)
     existing_messages = state.get("messages", [])
     if not isinstance(existing_messages, list):
         existing_messages = [existing_messages]
@@ -267,6 +271,7 @@ async def observe_and_choose_node(state: AgentState):
     plan_step = state.get("current_action", "")
     PROMPTY=get_prompt("choose_and_observe_prompt")
     # print("elements::::",elements)
+    llm=llm_call()
     response = await llm.ainvoke(
         [
             SystemMessage(content=PROMPTY),
@@ -281,7 +286,6 @@ async def observe_and_choose_node(state: AgentState):
             ),
         ]
     )
-
     chosen_label = response.content.strip()
     print("chosen_label",chosen_label)
 
@@ -331,6 +335,7 @@ async def observe_and_choose_node(state: AgentState):
 
 async def verifier_node(state: AgentState):
     logger.info("Started Verifier Node")
+    llm=llm_call()
     plan_step = state.get("current_action", "")
 
     # page_preview = ""

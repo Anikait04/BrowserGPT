@@ -1,11 +1,11 @@
 
 from dotenv import load_dotenv
-from workflow.agent_state import AgentState
+from src.workflow.agent_state import AgentState
 from langgraph.graph import StateGraph, END
-from workflow.browsertools import get_browser
+from src.workflow.browsertools import get_browser
 from logs import logger, log_separator
 load_dotenv()
-from workflow.nodes import *
+from src.workflow.nodes import *
 
 
 def agent_router(state: AgentState):
