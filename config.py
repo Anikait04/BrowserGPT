@@ -8,3 +8,5 @@ MODEL_NAME_OLLAMA="gpt-oss:120b-cloud"
 _PAGE_CACHE: Dict[str, str] = {}
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 BASE_URL = "https://openrouter.ai/api/v1"
+PORT=int(os.getenv("PORT", 1000))
+HOST=os.getenv("HOST", "0.0.0.0")

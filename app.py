@@ -1,14 +1,17 @@
 # app.py (at project root)
+import sys
 import uvicorn
 import os
 from dotenv import load_dotenv
+import asyncio
+import sys
+from config import HOST, PORT
 
 load_dotenv()
-
 if __name__ == "__main__":
     uvicorn.run(
-        "workflow.main:app",
-        host=os.getenv("HOST", "0.0.0.0"),
-        port=int(os.getenv("PORT", 5022)),
-        reload=True,
+        "src.workflow.router_app:app",
+        host=HOST,
+        port=PORT,
+        reload=False,
     ) 

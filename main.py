@@ -1,7 +1,7 @@
 import asyncio
 import os
 
-from workflow.agent import run_agent
+from src.workflow.agent import run_agent
 from logs import logger, log_separator
 
 

@@ -2,6 +2,8 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from src.routers.agent_router import router as agent_router
+import asyncio
+import sys
 
 app = FastAPI(title="Welcom to BrowserGPT API", version="1.0.0")
 app.include_router(agent_router)

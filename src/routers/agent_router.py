@@ -1,14 +1,13 @@
 import os
 import asyncio
+import sys
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from src.workflow.agent import run_agent
 from logs import logger, log_separator
 
-    
-
-router = APIRouter(prefix="/auth", tags=["Auth"])
+router = APIRouter(prefix="/nav", tags=["Navigation Agent"])
 class AgentRequest(BaseModel):
     goal: str
     max_steps: int = 30
@@ -29,7 +28,8 @@ async def run_agent_endpoint(request: AgentRequest):
 
         return {
             "status": "success",
-            "message": "Agent executed successfully"
+            "message": "Agent executed successfully",
+            "status_code": 200
         }
 
     except Exception as e:

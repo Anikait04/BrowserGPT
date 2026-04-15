@@ -265,8 +265,8 @@ async def observe_and_choose_node(state: AgentState):
             if c:
                 elements.append(c)
     labels_text = "\n".join(f"- {c['label']}" for c in elements)
-    with open("label.txt", "w",encoding="utf-8") as f:
-        f.write(labels_text)
+    # with open("label.txt", "w",encoding="utf-8") as f:
+    #     f.write(labels_text)
     
     plan_step = state.get("current_action", "")
     PROMPTY=get_prompt("choose_and_observe_prompt")
@@ -316,8 +316,8 @@ async def observe_and_choose_node(state: AgentState):
             s += 2
 
         return s
-    with open("elements.txt", "w",encoding="utf-8") as f:
-        f.write(str(elements))
+    # with open("elements.txt", "w",encoding="utf-8") as f:
+    #     f.write(str(elements))
     ranked = sorted(elements, key=score, reverse=True)
 
     top_5 = ranked[:20]
