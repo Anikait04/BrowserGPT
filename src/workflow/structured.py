@@ -1,5 +1,5 @@
 
-from typing import TypedDict, List
+from typing import Optional, TypedDict, List
 from typing import TypedDict, Literal
 
 from pydantic import BaseModel, Field
@@ -17,3 +17,12 @@ class AgentDecision(TypedDict):
     tool_name:str
     element_id:int
     message: str = Field(...,description="Short description of the action taken by the agent")
+
+class DOMElement(BaseModel):
+    id: int = Field(..., description="Unique element ID")
+    type: Literal["button", "input", "link"] = Field(..., description="Type of the DOM element")
+    label: str = Field(..., description="Visible or accessible label of the element")
+    selector: str = Field(..., description="CSS selector used to interact with the element")
+    href: Optional[str] = Field(None, description="Destination URL if element is a link")
+    context: Optional[str] = Field(None, description="DOM hierarchy or structural context")
+    message: str = Field(..., description="Short explanation of why this element is relevant")
