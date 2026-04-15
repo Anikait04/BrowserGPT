@@ -8,3 +8,5 @@ agent_flow.png
 agent_flow_ipynb.png
 test.ipynb
 .vscode
+/save_agentThread
+elements.txt

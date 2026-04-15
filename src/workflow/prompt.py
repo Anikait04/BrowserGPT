@@ -161,11 +161,12 @@ Your job is to analyze the user's request and determine whether it can be fulfil
 2. Break the goal into an ordered list of **high-level actions** required to complete it.
 3. Only include actions that an LLM or its connected tools can realistically perform.
 4. Do NOT include low-level implementation details (e.g., specific selectors, code, or credentials).
-5. Ensure the plan is logical, sequential, and complete.
+5. **Do NOT include any authentication, login, or credential-related steps. If such steps are implied or requested, omit them from the plan entirely.**
+6. Ensure the plan is logical, sequential, and complete.
 
 ### Success Criteria
 - If the task **can be planned**, return a structured plan with:
-  - A clear, ordered list of high-level actions.
+  - A clear, ordered list of high-level actions (excluding any authentication steps).
   - A concise success message indicating planning completion.
 
 - If the task **cannot be planned**, return:
@@ -181,7 +182,6 @@ Your job is to analyze the user's request and determine whether it can be fulfil
 {{
   "plan": [
     "Navigate to the target website",
-    "Authenticate the user if required",
     "Locate the relevant data section",
     "Extract the required information",
     "Store the extracted data in the desired format"

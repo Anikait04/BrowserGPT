@@ -1,10 +1,8 @@
 
 import uuid
 from dotenv import load_dotenv
-import json
-from pydantic import ValidationError
+from langgraph.types import interrupt
 from langchain_core.messages import HumanMessage,AIMessage, SystemMessage, SystemMessage,ToolMessage
-from src.workflow import llm
 from src.workflow.agent_state import AgentState
 from src.workflow.utils import plan_steps_update
 from src.workflow.browsertools import tools, get_browser
@@ -210,21 +208,41 @@ async def observe_and_choose_node(state: AgentState):
             return False
 
     async def get_stable_selector(el):
-        el_id = await el.get_attribute("id")
-        if el_id:
-            return f"#{el_id}"
-
+        # 1. aria-label (most stable)
         aria = await el.get_attribute("aria-label")
         if aria:
             return f"[aria-label='{aria}']"
 
+        # 2. name attribute
         name = await el.get_attribute("name")
         if name:
             return f"[name='{name}']"
 
+        # 3. placeholder
+        placeholder = await el.get_attribute("placeholder")
+        if placeholder:
+            return f"[placeholder='{placeholder}']"
+
+        # 4. data-testid
+        testid = await el.get_attribute("data-testid")
+        if testid:
+            return f"[data-testid='{testid}']"
+
+        # 5. type + role combo
+        el_type = await el.get_attribute("type")
+        role = await el.get_attribute("role")
+        if el_type:
+            return f"input[type='{el_type}']"
+        if role:
+            return f"[role='{role}']"
+
+        # 6. Last resort: escape the ID properly
+        el_id = await el.get_attribute("id")
+        if el_id:
+            return f'[id="{el_id}"]'  # attribute selector, not #id — avoids CSS parsing issues
+
         tag = await el.evaluate("e => e.tagName.toLowerCase()")
         return tag
-
     async def build_candidate(el, el_type):
         nonlocal idx
 
@@ -273,8 +291,8 @@ async def observe_and_choose_node(state: AgentState):
             if c:
                 elements.append(c)
     labels_text = "\n".join(f"- {c['label']}" for c in elements)
-    # with open("elements.txt", "w",encoding="utf-8") as f:
-    #     f.write(str(elements))
+    with open("elements.txt", "w",encoding="utf-8") as f:
+        f.write(str(elements))
     
     plan_step = state.get("current_action", "")
     PROMPTY=get_prompt("choose_and_observe_prompt")
@@ -412,4 +430,36 @@ Examples:
     return {
         **state,
         "progress_verification": verification
+    }
+
+
+async def human_wait_node(state: AgentState):
+    logger.info("Started Human Wait Node")
+    
+    # Show the agent's current status to the human
+    summary = f"""
+Agent is pausing for human input.
+
+Goal: {state['goal']}
+Current Step: {state['step_count']} / {len(state['entire_plan'])}
+Current Action: {state.get('current_action', 'N/A')}
+Current URL: {state.get('current_url', 'N/A')}
+Last Action: {state.get('last_action', 'N/A')}
+Progress Verification: {state.get('progress_verification', 'N/A')}
+
+Please provide instruction or type 'continue' to proceed.
+"""
+    # This pauses execution and waits for human input
+    human_input = interrupt(summary)
+    
+    logger.info(f"Human provided input: {human_input}")
+    
+    existing_messages = state.get("messages", [])
+    if not isinstance(existing_messages, list):
+        existing_messages = [existing_messages]
+    
+    return {
+        **state,
+        "messages": existing_messages + [HumanMessage(content=str(human_input))],
+        "progress_verification": f"Human instruction: {human_input}",
     }
