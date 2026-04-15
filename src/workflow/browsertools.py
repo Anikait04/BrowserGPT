@@ -7,12 +7,32 @@ _browser_instance = None
 async def get_browser():
     """Get or create browser instance"""
     global _browser_instance
+
+    if _browser_instance is not None:
+        try:
+            _ = _browser_instance.page.url  # throws if browser/page is closed
+        except Exception:
+            logger.warning("Browser instance is stale, reinitializing...")
+            _browser_instance = None
+
     if _browser_instance is None:
         logger.info("Starting new browser instance")
         _browser_instance = Browser()
         await _browser_instance.start()
         logger.info("Browser instance started")
+
     return _browser_instance
+
+async def close_browser():
+    """Close browser and reset singleton so next call gets a fresh instance."""
+    global _browser_instance
+    if _browser_instance is not None:
+        try:
+            await _browser_instance.close()
+        except Exception as e:
+            logger.warning(f"Error closing browser: {e}")
+        finally:
+            _browser_instance = None
 
 
 @tool
