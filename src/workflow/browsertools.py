@@ -54,6 +54,20 @@ async def type_text(selector: str, value: str, press_enter: bool = False) -> str
     logger.info(f"type_text result: {result}")
     return result
 
+class TypeAndEnterInput(BaseModel):
+    selector: str
+    value: str
+@tool(args_schema=TypeAndEnterInput)
+async def type_and_enter(selector: str, value: str) -> str:
+    """Type text into an input field and immediately press Enter."""
+    logger.info(f"type_and_enter called with selector={selector}, value={value}")
+    
+    browser = await get_browser()
+    result = await browser.type_and_enter(selector, value)
+    
+    logger.info(f"type_and_enter result: {result}")
+    return result
+
 @tool
 async def click_element(selector: str) -> str:
     """Click an element on the page using CSS selector."""
@@ -102,5 +116,6 @@ tools = [
     click_element,
     type_text,
     read_page,
+    type_and_enter,
     finish_task
 ]
