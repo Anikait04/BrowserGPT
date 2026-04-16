@@ -7,12 +7,32 @@ _browser_instance = None
 async def get_browser():
     """Get or create browser instance"""
     global _browser_instance
+
+    if _browser_instance is not None:
+        try:
+            _ = _browser_instance.page.url  # throws if browser/page is closed
+        except Exception:
+            logger.warning("Browser instance is stale, reinitializing...")
+            _browser_instance = None
+
     if _browser_instance is None:
         logger.info("Starting new browser instance")
         _browser_instance = Browser()
         await _browser_instance.start()
         logger.info("Browser instance started")
+
     return _browser_instance
+
+async def close_browser():
+    """Close browser and reset singleton so next call gets a fresh instance."""
+    global _browser_instance
+    if _browser_instance is not None:
+        try:
+            await _browser_instance.close()
+        except Exception as e:
+            logger.warning(f"Error closing browser: {e}")
+        finally:
+            _browser_instance = None
 
 
 @tool
@@ -52,6 +72,20 @@ async def type_text(selector: str, value: str, press_enter: bool = False) -> str
     result = await browser.type(selector, value, press_enter=press_enter)
     
     logger.info(f"type_text result: {result}")
+    return result
+
+class TypeAndEnterInput(BaseModel):
+    selector: str
+    value: str
+@tool(args_schema=TypeAndEnterInput)
+async def type_and_enter(selector: str, value: str) -> str:
+    """Type text into an input field and immediately press Enter."""
+    logger.info(f"type_and_enter called with selector={selector}, value={value}")
+    
+    browser = await get_browser()
+    result = await browser.type_and_enter(selector, value)
+    
+    logger.info(f"type_and_enter result: {result}")
     return result
 
 @tool
@@ -102,5 +136,6 @@ tools = [
     click_element,
     type_text,
     read_page,
+    type_and_enter,
     finish_task
 ]

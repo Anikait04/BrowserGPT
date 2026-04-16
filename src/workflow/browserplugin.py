@@ -137,6 +137,60 @@ class Browser:
         except Exception:
             logger.exception(f"Type error on selector: {selector}")
             return f"Type error: {selector}"
+    
+    async def type_and_enter(self, selector: str, text: str) -> str:
+        """Type text into an input field and always press Enter"""
+        try:
+            logger.info(f"Typing '{text}' into: {selector} and pressing Enter")
+
+            await self.page.wait_for_selector(selector, state="visible", timeout=10000)
+
+            # Clear existing content
+            await self.page.fill(selector, "")
+            await asyncio.sleep(0.2)
+
+            # Type text
+            await self.page.type(selector, text, delay=50)
+
+            # Always press Enter
+            await self.page.keyboard.press("Enter")
+            await asyncio.sleep(1)
+
+            logger.info(f"Typed and submitted: {selector}")
+            return f"Successfully typed '{text}' into {selector} and pressed Enter"
+
+        except PlaywrightTimeoutError:
+            alternatives = [
+                'textarea[name="q"]',
+                'input[name="q"]',
+                'input[title="Search"]',
+                'textarea[title="Search"]',
+                '#APjFqb'
+            ]
+
+            for alt in alternatives:
+                try:
+                    await self.page.wait_for_selector(alt, state="visible", timeout=3000)
+
+                    await self.page.fill(alt, "")
+                    await self.page.type(alt, text, delay=50)
+
+                    # Always press Enter
+                    await self.page.keyboard.press("Enter")
+                    await asyncio.sleep(1)
+
+                    logger.info(f"Typed and submitted using alternative: {alt}")
+                    return f"Typed and submitted using alternative selector: {alt}"
+
+                except Exception:
+                    continue
+
+            logger.error(f"Could not find input field: {selector}. Tried alternatives: {alternatives}")
+            return f"Could not find input field: {selector}. Tried alternatives: {alternatives}"
+
+        except Exception:
+            logger.exception(f"type_and_enter error on selector: {selector}")
+            return f"type_and_enter error: {selector}"
 
     async def read(self) -> str:
         """Read visible page content"""

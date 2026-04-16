@@ -55,62 +55,101 @@
 NAVIGATION_PROMPT = """
 You MUST return a valid JSON object and nothing else.
 
-Hard validation rules:
+----------------------------------------
+STRICT VALIDATION RULES
+----------------------------------------
 
 1. If route_decision == "tools":
    - tool_name MUST NOT be empty.
-   - tool_name MUST be one of:
-     ["navigate", "click_element", "type_text"]
-   - element_id MUST be a valid numeric ID from the provided website elements list when required.
+   - tool_name MUST be EXACTLY one of:
+     ["navigate", "click_element", "type_text", "type_and_enter"]
    - tool_input MUST follow tool semantics.
+   - element_id MUST be:
+       - REQUIRED for element-based tools
+       - null for non-element tools
 
 2. If route_decision != "tools":
-   - tool_name MUST be empty string "".
-   - tool_input MUST be empty string "".
-   - element_id MUST be null.
+   - tool_name MUST be "" (empty string)
+   - tool_input MUST be "" (empty string)
+   - element_id MUST be null
 
-Tool input semantics:
+----------------------------------------
+TOOL USAGE RULES
+----------------------------------------
 
-- navigate:
-  - tool_input MUST be a full valid URL.
-  - element_id MUST be null.
+navigate:
+- Use ONLY for opening a website.
+- tool_input MUST be a full valid URL (e.g., https://example.com)
+- element_id MUST be null
 
-- click_element:
-  - tool_input MUST be empty string "".
-  - element_id MUST be the numeric ID of EXACTLY ONE visible element.
+click_element:
+- Use ONLY to click a visible element.
+- tool_input MUST be ""
+- element_id MUST match EXACTLY ONE element from the list
 
-- type_text:
-  - tool_input MUST be ONLY the exact text to type.
-  - element_id MUST be the numeric ID of EXACTLY ONE visible element.
+type_text:
+- Use ONLY to type WITHOUT submitting.
+- tool_input MUST be ONLY the exact text to type
+- element_id MUST match EXACTLY ONE element
 
-Perception rules:
+type_and_enter:
+- Use when typing SHOULD trigger an action (e.g., search, submit form)
+- tool_input MUST be ONLY the exact text to type
+- element_id MUST match EXACTLY ONE element
 
-- ONLY use element IDs from the provided list.
-- NEVER invent IDs.
-- NEVER invent selectors.
-- NEVER guess hidden elements.
-- If unsure, use "read_page".
-- If the page state is incomplete, use "read_page".
+----------------------------------------
+DECISION LOGIC (CRITICAL)
+----------------------------------------
 
-Decision guidance:
+- If the step involves SEARCHING, SUBMITTING, or EXECUTING a query:
+  → ALWAYS use "type_and_enter"
 
-- Use "read_page" if you need updated DOM information.
-- Use "wait" if an action was just performed and results may not yet be visible.
+- If the step involves ONLY filling input fields:
+  → use "type_text"
+
+- If a clickable result (e.g., video, link) is visible:
+  → use "click_element"
+
+- If page content or elements are unknown, outdated, or missing:
+  → use "read_page"
+
+- If an action was just performed and results may not have loaded:
+  → use "wait"
+
 - Use "finish" ONLY when the goal is fully completed.
 
-Output must be STRICT JSON.
-No explanations.
-No markdown.
-No extra keys.
+----------------------------------------
+PERCEPTION CONSTRAINTS (STRICT)
+----------------------------------------
 
-Response schema:
+- ONLY use element IDs provided in the list
+- NEVER invent element IDs
+- NEVER invent selectors
+- NEVER assume hidden elements
+- NEVER act without observing the page if uncertain
+
+----------------------------------------
+OUTPUT FORMAT (MANDATORY)
+----------------------------------------
+
+Return ONLY valid JSON.
+
+Do NOT include:
+- explanations outside JSON
+- markdown
+- comments
+- extra keys
+
+----------------------------------------
+RESPONSE SCHEMA
+----------------------------------------
 
 {
   "route_decision": "tools" | "read_page" | "finish" | "wait",
   "tool_name": "<string or empty>",
   "tool_input": "<string or empty>",
   "element_id": <number or null>,
-  "message": "<short reasoning description>"
+  "message": "<brief reasoning>"
 }
 """
 PLANNER_PROMPT="""You are an Automation Planning Agent.
@@ -122,11 +161,12 @@ Your job is to analyze the user's request and determine whether it can be fulfil
 2. Break the goal into an ordered list of **high-level actions** required to complete it.
 3. Only include actions that an LLM or its connected tools can realistically perform.
 4. Do NOT include low-level implementation details (e.g., specific selectors, code, or credentials).
-5. Ensure the plan is logical, sequential, and complete.
+5. **Do NOT include any authentication, login, or credential-related steps. If such steps are implied or requested, omit them from the plan entirely.**
+6. Ensure the plan is logical, sequential, and complete.
 
 ### Success Criteria
 - If the task **can be planned**, return a structured plan with:
-  - A clear, ordered list of high-level actions.
+  - A clear, ordered list of high-level actions (excluding any authentication steps).
   - A concise success message indicating planning completion.
 
 - If the task **cannot be planned**, return:
@@ -142,7 +182,6 @@ Your job is to analyze the user's request and determine whether it can be fulfil
 {{
   "plan": [
     "Navigate to the target website",
-    "Authenticate the user if required",
     "Locate the relevant data section",
     "Extract the required information",
     "Store the extracted data in the desired format"
@@ -231,6 +270,19 @@ If multiple elements are similarly relevant, select the one that:
 - If no element perfectly matches the intent, return the **closest possible match**
 - Never return `null` or an empty response
 
+### Output Format (STRICT JSON ONLY)
+
+You MUST return a valid JSON object with EXACTLY this structure:
+
+{
+  "id": <integer>,
+  "type": "button" | "input" | "link",
+  "label": "<string>",
+  "selector": "<string>",
+  "href": "<string or null>",
+  "context": "<string or null>",
+  "message": "<short explanation of why this element is relevant>"
+}
 """
 def get_prompt(template_name: str):
     templates = {
