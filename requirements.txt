@@ -14,3 +14,4 @@ langchain-openai
 langgraph
 
 typing-extensions
+langgraph-checkpoint-sqlite
