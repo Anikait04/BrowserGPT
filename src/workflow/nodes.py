@@ -1,4 +1,5 @@
-
+#nodes.py
+from urllib import response
 import uuid
 from dotenv import load_dotenv
 from langgraph.types import interrupt
@@ -8,26 +9,36 @@ from src.workflow.utils import plan_steps_update
 from src.workflow.browsertools import tools, get_browser
 from src.workflow.prompt import get_prompt
 from logs import logger
+from typing import cast
 from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.prebuilt import ToolNode
 from src.workflow.structured import AgentDecision, DOMElement, PlanOutput
 import re
 from src.workflow.utils import plan_steps_update
 from config import _PAGE_CACHE
-from src.workflow.llm import llm_call
+from src.workflow.llm import CustomLLMClient, llm_call
 load_dotenv()
 
-
+# singleton
+client = CustomLLMClient()
 async def planner_node(state: AgentState):
-    logger.info("Planning high-level steps") 
-    llm=llm_call()
-    prompt = get_prompt("planner_prompt")
-    structured_llm = llm.with_structured_output(PlanOutput)
-    result= await structured_llm.ainvoke([
-            SystemMessage(content=prompt),
-            HumanMessage(content=f"Goal: {state['goal']}"),
-        ])
-    print("planner result:::",result)
+    logger.info("Planning high-level steps")
+
+    system_prompt = get_prompt("planner_prompt")
+    user_prompt = f"Goal: {state['goal']}".strip()
+
+    result = await client.generate(
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        structured=True,
+        schema=PlanOutput.model_json_schema()
+    )
+    print("Raw planner_node result:::", result)
+    # result is a dict from res.json() — parse it into PlanOutput
+    result = cast(PlanOutput, result)
+
+    print("planner result:::", result)
+
     return {
         **state,
         "entire_plan": result.plan,

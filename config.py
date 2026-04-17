@@ -10,3 +10,7 @@ OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 BASE_URL = "https://openrouter.ai/api/v1"
 PORT=int(os.getenv("PORT", 1000))
 HOST=os.getenv("HOST", "0.0.0.0")
+USERNAME = os.getenv("API_USERNAME")
+PASSWORD = os.getenv("API_PASSWORD")
+LOGIN_URL = os.getenv("LOGIN_URL")
+MODEL_URL = os.getenv("MODEL_URL")
