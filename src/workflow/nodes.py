@@ -1,5 +1,5 @@
 #nodes.py
-from urllib import response
+
 import uuid
 from dotenv import load_dotenv
 from langgraph.types import interrupt
@@ -9,6 +9,7 @@ from src.workflow.utils import plan_steps_update
 from src.workflow.browsertools import tools, get_browser
 from src.workflow.prompt import get_prompt
 from logs import logger
+from pydantic import TypeAdapter 
 from typing import cast
 from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.prebuilt import ToolNode
@@ -35,7 +36,8 @@ async def planner_node(state: AgentState):
     )
     print("Raw planner_node result:::", result)
     # result is a dict from res.json() — parse it into PlanOutput
-    result = cast(PlanOutput, result)
+    result=result.get("response",result)
+    result = PlanOutput(**result)
 
     print("planner result:::", result)
 
@@ -48,8 +50,6 @@ async def planner_node(state: AgentState):
 
 async def agent_node(state: AgentState):
     logger.info("Started Agent Node")
-
-    llm=llm_call()
     if state["steps"] >= state["max_steps"]:
         return {
             **state,
@@ -84,13 +84,17 @@ async def agent_node(state: AgentState):
 
         {elements_info}
         """ 
-    structured_llm=llm.with_structured_output(AgentDecision)
-    response = await structured_llm.ainvoke(
-        [
-            SystemMessage(content=get_prompt("navigate_prompt")),
-            HumanMessage(content=user_prompt),
-        ]
+    schema = TypeAdapter(AgentDecision).json_schema()
+    system_prompt=get_prompt("navigate_prompt")
+    result = await client.generate(
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        structured=True,
+        schema=schema
     )
+    
+    result=result.get("response",result)
+    response = AgentDecision(**result)
     print("agent_node response:::",response)
     existing_messages = state.get("messages", [])
     if not isinstance(existing_messages, list):
@@ -306,25 +310,42 @@ async def observe_and_choose_node(state: AgentState):
         f.write(str(elements))
     
     plan_step = state.get("current_action", "")
-    PROMPTY=get_prompt("choose_and_observe_prompt")
+    system_prompt=get_prompt("choose_and_observe_prompt")
+    user_prompt = f"""
+    GOAL: {state['goal']}
+    STEP: {plan_step}
+
+    AVAILABLE ELEMENTS:
+    {elements}
+    """.strip()
     # print("elements::::",elements)
-    llm=llm_call()
-    structured_llm_doms=llm.with_structured_output(DOMElement)
-
-    response = await structured_llm_doms.ainvoke(
-        [
-            SystemMessage(content=PROMPTY),
-                        HumanMessage(
-                            content=f"""
-            GOAL: {state['goal']}
-            STEP: {plan_step}
-
-            AVAILABLE ELEMENTS:
-            {elements}
-            """
-            ),
-        ]
+    result = await client.generate(
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        structured=True,
+        schema=DOMElement.model_json_schema()
     )
+    
+    result=result.get("response",result)
+    response = DOMElement(**result)
+
+    print("planner result:::", result)
+    # structured_llm_doms=llm.with_structured_output(DOMElement)
+
+    # response = await structured_llm_doms.ainvoke(
+    #     [
+    #         SystemMessage(content=PROMPTY),
+    #                     HumanMessage(
+    #                         content=f"""
+    #         GOAL: {state['goal']}
+    #         STEP: {plan_step}
+
+    #         AVAILABLE ELEMENTS:
+    #         {elements}
+    #         """
+    #         ),
+    #     ]
+    # )
     selected_element = next(
     (el for el in elements if el["id"] == response.id),
     None
@@ -372,45 +393,77 @@ async def observe_and_choose_node(state: AgentState):
 
 async def verifier_node(state: AgentState):
     logger.info("Started Verifier Node")
-    llm=llm_call()
     plan_step = state.get("current_action", "")
 
     # page_preview = ""
     current_url = state.get("current_url")
     # if current_url and current_url in _PAGE_CACHE:
     #     page_preview = _PAGE_CACHE[current_url][:600]
-    verdict = await llm.ainvoke(
-        [
-            SystemMessage(
-                content="Answer only 'yes' or 'no'. Be strict — only say yes if real progress was made."
-            ),
-            HumanMessage(
-                content=f"""
-GOAL: {state['goal']}
+    
+    system_prompt = (
+    "Answer only 'yes' or 'no'. "
+    "Be strict — only say yes if real progress was made."
+)
 
-ENTIRE PLAN: {state['entire_plan']}
+    user_prompt = f"""
+    GOAL: {state['goal']}
 
-CURRENT PLAN STEP: {plan_step}
+    ENTIRE PLAN: {state['entire_plan']}
 
-LAST ACTION: {state['last_action']}
+    CURRENT PLAN STEP: {plan_step}
 
-CURRENT URL: {current_url}
+    LAST ACTION: {state['last_action']}
 
-MESSAGES LOG OF ENTIRE PROCESS TILL NOW {state["messages"]}
+    CURRENT URL: {current_url}
 
-Did the last action successfully complete or make progress on the plan?
+    MESSAGES LOG OF ENTIRE PROCESS TILL NOW {state["messages"]}
 
-Examples:
-- If step is "search for X" and search was performed → yes
-- If step is "click video" and video page opened → yes
-- If step is "search" but search was done again → no (redundant)
-- If an error occurred → no
-"""
-            ),
-        ]
+    Did the last action successfully complete or make progress on the plan?
+
+    Examples:
+    - If step is "search for X" and search was performed → yes
+    - If step is "click video" and video page opened → yes
+    - If step is "search" but search was done again → no (redundant)
+    - If an error occurred → no
+    """.strip()
+    verdict = await client.generate(
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        structured=False
     )
+    
+#     verdict = await llm.ainvoke(
+#         [
+#             SystemMessage(
+#                 content="Answer only 'yes' or 'no'. Be strict — only say yes if real progress was made."
+#             ),
+#             HumanMessage(
+#                 content=f"""
+# GOAL: {state['goal']}
 
-    verdict_text = verdict.content.lower().strip()
+# ENTIRE PLAN: {state['entire_plan']}
+
+# CURRENT PLAN STEP: {plan_step}
+
+# LAST ACTION: {state['last_action']}
+
+# CURRENT URL: {current_url}
+
+# MESSAGES LOG OF ENTIRE PROCESS TILL NOW {state["messages"]}
+
+# Did the last action successfully complete or make progress on the plan?
+
+# Examples:
+# - If step is "search for X" and search was performed → yes
+# - If step is "click video" and video page opened → yes
+# - If step is "search" but search was done again → no (redundant)
+# - If an error occurred → no
+# """
+#             ),
+#         ]
+#     )
+    verdict=verdict.get("response",verdict)
+    verdict_text = verdict.lower()
     logger.info(f"verifier_node verdict: {verdict_text}")
     verification = state.get("current_action", "")
     if verdict_text.startswith("yes"):

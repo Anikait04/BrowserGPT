@@ -14,3 +14,4 @@ USERNAME = os.getenv("API_USERNAME")
 PASSWORD = os.getenv("API_PASSWORD")
 LOGIN_URL = os.getenv("LOGIN_URL")
 MODEL_URL = os.getenv("MODEL_URL")
+thread_dir_name = "save_agentThread"
