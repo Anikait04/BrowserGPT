@@ -5,16 +5,16 @@ from langchain_ollama import ChatOllama
 from langchain_openai import ChatOpenAI
 import inspect
 from config import MODEL_NAME_OLLAMA,MODEL_NAME_OPENROUTER,OPENROUTER_API_KEY,BASE_URL
-load_dotenv()
+# load_dotenv()
 
-def llm_call():
-    llm = ChatOllama(
-    model=MODEL_NAME_OLLAMA,
-    temperature=0,
-    max_retries=2,
-    model_kwargs={"format": "json"}
-)
-    return llm
+# def llm_call():
+#     llm = ChatOllama(
+#     model=MODEL_NAME_OLLAMA,
+#     temperature=0,
+#     max_retries=2,
+#     model_kwargs={"format": "json"}
+# )
+#     return llm
 
 # def llm_call():
 #     llm = ChatOpenAI(
@@ -71,7 +71,7 @@ class CustomLLMClient:
         # Better: just send the schema as a dict
         if structured and schema:
             payload["output_schema"] = schema
-        print("PAYLOAD BEING SENT:", payload)
+        # print("PAYLOAD BEING SENT:", payload)
         async with httpx.AsyncClient(timeout=120) as client:
             res = await client.post(
                 MODEL_URL,
