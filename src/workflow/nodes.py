@@ -1,5 +1,5 @@
 #nodes.py
-import asyncio
+
 import uuid
 from dotenv import load_dotenv
 from langgraph.types import interrupt
@@ -169,29 +169,15 @@ async def tool_execution_node(state: AgentState, config: RunnableConfig):
     browser = await get_browser()
     current_page_url = browser.page.url
  
-   # ── Screenshot → SSE push (only when a task_id exists i.e. streaming mode) ──
+    # ── Screenshot → SSE push (only when a task_id exists i.e. streaming mode) ──
     if task_id:
         try:
             import base64
             from src.routers.agent_router import push_screenshot
-
-            # Wait for page to settle before screenshotting
-            try:
-                await browser.page.wait_for_load_state("domcontentloaded", timeout=3000)
-            except Exception:
-                pass  # don't block if already loaded or timeout
-
-            # Screenshot with explicit timeout so it can never hang the agent
-            screenshot_bytes = await asyncio.wait_for(
-                browser.page.screenshot(
-                    type="jpeg",
-                    quality=65,
-                    clip={"x": 0, "y": 0, "width": 1280, "height": 720},  # fixed clip avoids no_viewport issues
-                ),
-                timeout=8.0,  # 8 second hard timeout
-            )
+ 
+            screenshot_bytes = await browser.page.screenshot(type="jpeg", quality=70)
             screenshot_b64 = base64.b64encode(screenshot_bytes).decode("utf-8")
-
+ 
             await push_screenshot(
                 task_id=task_id,
                 screenshot_b64=screenshot_b64,
@@ -201,9 +187,6 @@ async def tool_execution_node(state: AgentState, config: RunnableConfig):
                 url=current_page_url,
                 message=f"{tool_name} — {tool_input or tool_selector or ''}".strip(" —"),
             )
-            logger.info(f"Screenshot pushed for step {step}, action={tool_name}")
-        except asyncio.TimeoutError:
-            logger.warning(f"Screenshot timed out at step {step} — skipping, agent continues")
         except Exception as e:
             logger.warning(f"Screenshot push failed (non-fatal): {e}")
     # ─────────────────────────────────────────────────────────────────────────
