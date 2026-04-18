@@ -28,6 +28,8 @@ async def planner_node(state: AgentState):
     system_prompt = get_prompt("planner_prompt")
     user_prompt = f"Goal: {state['goal']}".strip()
 
+
+
     result = await client.generate(
         system_prompt=system_prompt,
         user_prompt=user_prompt,
