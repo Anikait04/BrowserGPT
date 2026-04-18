@@ -1,3 +1,5 @@
+import os
+
 import aiosqlite
 import uuid
 from dotenv import load_dotenv
@@ -9,7 +11,7 @@ from logs import logger, log_separator
 from langgraph.types import Command
 load_dotenv()
 from src.workflow.nodes import *
-
+from config import thread_dir_name 
 
 def agent_router(state: AgentState):
     route = state["agent_decision"]
@@ -59,7 +61,9 @@ _app = None
 async def get_app():
     global _checkpointer, _app
     if _app is None:
-        conn = await aiosqlite.connect("save_agentThread/checkpoints.db")
+        if not os.path.exists(thread_dir_name):
+            os.makedirs(thread_dir_name)
+        conn = await aiosqlite.connect(f"{thread_dir_name}/checkpoints.db")
         _checkpointer = AsyncSqliteSaver(conn)
         _app = graph.compile(checkpointer=_checkpointer)
 
