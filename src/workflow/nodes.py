@@ -19,7 +19,7 @@ from src.workflow.utils import plan_steps_update
 from config import _PAGE_CACHE
 from src.workflow.llm import CustomLLMClient, llm_call
 load_dotenv()
-
+from langchain_core.runnables import RunnableConfig
 # singleton
 client = CustomLLMClient()
 async def planner_node(state: AgentState):
@@ -112,7 +112,7 @@ async def agent_node(state: AgentState):
         }
 
 
-async def tool_execution_node(state: dict):
+async def tool_execution_node(state: AgentState, config: RunnableConfig):
     logger.info("Started Tool Execution Node")
     tool_name = state.get("tool_name")
     if not tool_name:
@@ -172,7 +172,7 @@ async def tool_execution_node(state: dict):
     tool_node = ToolNode(tools)
 
 
-    result = await tool_node.ainvoke({"messages": [ai_message]})
+    result = await tool_node.ainvoke({"messages": [ai_message]}, config)
     tool_msg: ToolMessage = result["messages"][-1]
 
     existing_messages = state.get("messages", [])
