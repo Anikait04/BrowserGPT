@@ -1,4 +1,4 @@
-from typing import TypedDict, Sequence, Annotated, List, Dict
+from typing import TypedDict, Sequence, Annotated, List, Dict, Optional
 from langchain_core.messages import BaseMessage
 
 
@@ -18,4 +18,4 @@ class AgentState(TypedDict):
     element_id:int
     messages: Annotated[Sequence[BaseMessage], "node remarks messages exchanged so far"]
     chosen_element:List[str]
-    
+    task_id: Optional[str]   # SSE streaming task ID — None when not streaming
