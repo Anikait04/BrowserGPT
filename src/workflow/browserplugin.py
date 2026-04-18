@@ -17,7 +17,11 @@ class Browser:
                 headless=False,
                 args=[
                     '--start-maximized',
-                    '--disable-blink-features=AutomationControlled'  # Avoid detection
+                    '--disable-blink-features=AutomationControlled',
+                    "--no-sandbox",
+                    "--disable-setuid-sandbox",
+                    "--disable-dev-shm-usage",
+                    "--disable-gpu",
                 ]
             )
             self.page = await self.browser.new_page(no_viewport=True)
