@@ -1,0 +1,15 @@
+# render.yaml
+services:
+  - type: web
+    name: browsergpt
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: starter          # upgrade to 'standard' if you need more RAM for browsers
+    envVars:
+      - key: ANTHROPIC_API_KEY   # or whatever LLM key you use
+        sync: false              # means you'll paste it manually in the dashboard
+      - key: HOST
+        value: 0.0.0.0
+      - key: PORT
+        value: 10000
+    healthCheckPath: /nav/
