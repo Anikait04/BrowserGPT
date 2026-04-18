@@ -111,88 +111,91 @@ async def agent_node(state: AgentState):
             "current_action": state["current_action"],
         }
 
-
+ 
 async def tool_execution_node(state: AgentState, config: RunnableConfig):
     logger.info("Started Tool Execution Node")
     tool_name = state.get("tool_name")
     if not tool_name:
         return state
-
-    tool_input = state.get("tool_input")
-    element_id = state.get("element_id")
-
+ 
+    tool_input  = state.get("tool_input")
+    element_id  = state.get("element_id")
+    task_id     = state.get("task_id")       # None when not streaming
+    step        = state.get("steps", 0)
+    max_steps   = state.get("max_steps", 30)
+ 
     tool_selector = None
-
     if element_id is not None:
         selected = next(
-            (el for el in state.get("chosen_element", [])
-             if el["id"] == element_id),
+            (el for el in state.get("chosen_element", []) if el["id"] == element_id),
             None
         )
         if selected:
             tool_selector = selected["selector"]
         else:
             return state
-
-
+ 
     if tool_name == "navigate":
         args = {"url": tool_input}
-
     elif tool_name == "type_text":
-        args = {
-            "selector": tool_selector,
-            "value": tool_input,
-            # "press_enter": True
-        }
+        args = {"selector": tool_selector, "value": tool_input}
     elif tool_name == "type_and_enter":
-        args = {
-            "selector": tool_selector,
-            "value": tool_input,
-        }
-
+        args = {"selector": tool_selector, "value": tool_input}
     elif tool_name == "click_element":
-        args = {
-            "selector": tool_selector,
-        }
-
+        args = {"selector": tool_selector}
     else:
         args = {}
-
+ 
     ai_message = AIMessage(
         content="",
-        tool_calls=[
-            {
-                "id": uuid.uuid4().hex,
-                "name": tool_name,
-                "args": args,
-            }
-        ],
+        tool_calls=[{"id": uuid.uuid4().hex, "name": tool_name, "args": args}],
     )
-    print("tool_call input:::",ai_message)
+    print("tool_call input:::", ai_message)
     tool_node = ToolNode(tools)
-
-
+ 
     result = await tool_node.ainvoke({"messages": [ai_message]}, config)
     tool_msg: ToolMessage = result["messages"][-1]
-
+ 
     existing_messages = state.get("messages", [])
-
-    if isinstance(existing_messages, list):
-        updated_messages = existing_messages + [tool_msg.content]
-    else:
-        updated_messages = [tool_msg.content]
-
-
+    updated_messages = (
+        existing_messages + [tool_msg.content]
+        if isinstance(existing_messages, list)
+        else [tool_msg.content]
+    )
+ 
     if tool_name == "navigate" and tool_input:
         state["current_url"] = tool_input
-
+ 
     browser = await get_browser()
     current_page_url = browser.page.url
+ 
+    # ── Screenshot → SSE push (only when a task_id exists i.e. streaming mode) ──
+    if task_id:
+        try:
+            import base64
+            from src.routers.agent_router import push_screenshot
+ 
+            screenshot_bytes = await browser.page.screenshot(type="jpeg", quality=70)
+            screenshot_b64 = base64.b64encode(screenshot_bytes).decode("utf-8")
+ 
+            await push_screenshot(
+                task_id=task_id,
+                screenshot_b64=screenshot_b64,
+                step=step,
+                max_steps=max_steps,
+                action=tool_name,
+                url=current_page_url,
+                message=f"{tool_name} — {tool_input or tool_selector or ''}".strip(" —"),
+            )
+        except Exception as e:
+            logger.warning(f"Screenshot push failed (non-fatal): {e}")
+    # ─────────────────────────────────────────────────────────────────────────
+ 
     return {
         **state,
         "messages": updated_messages,
         "last_action": tool_name,
-        "current_url":current_page_url
+        "current_url": current_page_url,
     }
 
 async def observe_and_choose_node(state: AgentState):

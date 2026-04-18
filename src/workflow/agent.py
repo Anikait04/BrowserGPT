@@ -10,6 +10,7 @@ from src.workflow.browsertools import get_browser,close_browser
 from logs import logger, log_separator
 from langgraph.types import Command
 load_dotenv()
+
 from src.workflow.nodes import *
 from config import thread_dir_name 
 
@@ -78,7 +79,7 @@ async def get_app():
     return _app
 
 
-async def run_agent(goal: str, max_steps: int = 30, thread_id: str = None):
+async def run_agent(goal: str, max_steps: int = 30, thread_id: str = None,task_id: str = None):
     log_separator("AGENT RUN START")
 
     app = await get_app()
@@ -93,6 +94,7 @@ async def run_agent(goal: str, max_steps: int = 30, thread_id: str = None):
         "step_count": 0,
         "current_action": "",
         "agent_decision": "",
+        "task_id": task_id, 
         "steps": 0,
         "progress_verification": "",
         "max_steps": max_steps,
@@ -102,13 +104,15 @@ async def run_agent(goal: str, max_steps: int = 30, thread_id: str = None):
         "tool_name": "",
         "tool_input": "",
         "tool_selector": "",
-        "messages": []
+        "messages": [],
+        "task_id": task_id,   # ← passed into every node via state
     }
 
     try:
         while True:
             async for _ in app.astream(state, config=config, stream_mode="values"):
                 pass
+    
 
             current_state = await app.aget_state(config)
 
@@ -129,6 +133,16 @@ async def run_agent(goal: str, max_steps: int = 30, thread_id: str = None):
                 state = (await app.aget_state(config)).values
             else:
                 break  # agent finished normally
+            # Signal SSE stream: task finished successfully
+        if task_id:
+            from src.routers.agent_router import push_done
+            await push_done(task_id, "Task completed successfully")
+    except Exception as e:
+        # Signal SSE stream: task failed
+        if task_id:
+            from src.routers.agent_router import push_error
+            await push_error(task_id, str(e))
+        raise
 
     finally:
         await close_browser()
