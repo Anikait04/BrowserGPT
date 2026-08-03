@@ -30,7 +30,7 @@ from config import MODEL_NAME_OLLAMA,MODEL_NAME_OPENROUTER,OPENROUTER_API_KEY,BA
 import httpx
 import os
 from dotenv import load_dotenv
-from config import USERNAME, PASSWORD, LOGIN_URL, MODEL_URL
+from config import USERNAME, PASSWORD, LOGIN_URL, MODEL_URL, MODEL_NAME_OLLAMA
 import cloudpickle
 import dill, base64
 import io
@@ -60,7 +60,7 @@ class CustomLLMClient:
             await self.login()
 
         payload = {
-            "model": "gpt-oss:120b-cloud",
+            "model": MODEL_NAME_OLLAMA,
             "system_prompt": system_prompt,
             "user_prompt": user_prompt,
             "structured": structured,
