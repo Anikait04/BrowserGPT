@@ -5,16 +5,16 @@ from langchain_ollama import ChatOllama
 from langchain_openai import ChatOpenAI
 import inspect
 from config import MODEL_NAME_OLLAMA,MODEL_NAME_OPENROUTER,OPENROUTER_API_KEY,BASE_URL
-load_dotenv()
+# load_dotenv()
 
-def llm_call():
-    llm = ChatOllama(
-    model=MODEL_NAME_OLLAMA,
-    temperature=0,
-    max_retries=2,
-    model_kwargs={"format": "json"}
-)
-    return llm
+# def llm_call():
+#     llm = ChatOllama(
+#     model=MODEL_NAME_OLLAMA,
+#     temperature=0,
+#     max_retries=2,
+#     model_kwargs={"format": "json"}
+# )
+#     return llm
 
 # def llm_call():
 #     llm = ChatOpenAI(
@@ -30,7 +30,7 @@ def llm_call():
 import httpx
 import os
 from dotenv import load_dotenv
-from config import USERNAME, PASSWORD, LOGIN_URL, MODEL_URL
+from config import USERNAME, PASSWORD, LOGIN_URL, MODEL_URL, MODEL_NAME_OLLAMA
 import cloudpickle
 import dill, base64
 import io
@@ -60,7 +60,7 @@ class CustomLLMClient:
             await self.login()
 
         payload = {
-            "model": "gpt-oss:120b-cloud",
+            "model": MODEL_NAME_OLLAMA,
             "system_prompt": system_prompt,
             "user_prompt": user_prompt,
             "structured": structured,
@@ -71,7 +71,7 @@ class CustomLLMClient:
         # Better: just send the schema as a dict
         if structured and schema:
             payload["output_schema"] = schema
-        print("PAYLOAD BEING SENT:", payload)
+        # print("PAYLOAD BEING SENT:", payload)
         async with httpx.AsyncClient(timeout=120) as client:
             res = await client.post(
                 MODEL_URL,

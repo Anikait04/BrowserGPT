@@ -1,0 +1,26 @@
+version: "3.9"
+
+services:
+  browsergpt:
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    container_name: browsergpt
+
+    ports:
+      - "8000:8000"
+
+    environment:
+      HOST: 0.0.0.0
+      PORT: 8000
+      DISPLAY: ":99"
+      PYTHONUNBUFFERED: "1"
+
+    restart: unless-stopped
+
+    volumes:
+      - ./logs:/app/logs
+
+    stdin_open: true
+    tty: true
