@@ -1,4 +1,4 @@
-name: Deploy to Azure VM
+name: Deploy to Ancient Machine
 
 on:
   push:
@@ -10,12 +10,13 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Deploy over SSH
+      - name: Deploy
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.HOST }}
           username: ${{ secrets.USERNAME }}
           key: ${{ secrets.SSH_KEY }}
+          passphrase: ${{ secrets.SSH_PASSPHRASE }}
 
           script: |
             cd ~/projects/BrowserGPT
