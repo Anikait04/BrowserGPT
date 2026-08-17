@@ -9,6 +9,8 @@ from config import HOST, PORT
 
 load_dotenv()
 if __name__ == "__main__":
+    print(f"host, port {HOST}, {PORT}")
+ 
     uvicorn.run(
         "src.workflow.router_app:app",
         host=HOST,

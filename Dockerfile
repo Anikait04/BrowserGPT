@@ -15,10 +15,10 @@ COPY . .
 
 ENV DISPLAY=:99
 ENV HOST=0.0.0.0
-ENV PORT=10000
+ENV PORT=8000
 ENV PYTHONUNBUFFERED=1
 
-EXPOSE 10000
+EXPOSE 8000
 
 COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]
