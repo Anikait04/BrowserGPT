@@ -5,12 +5,16 @@ from pydantic import BaseModel, Field
 from typing import List
 
 
-class AgentDecision(TypedDict):
+class AgentDecision(BaseModel):
     route_decision: Literal["tools", "read_page", "finish", "wait"]
-    tool_input: str
-    tool_name:str
-    element_id:int
-    message: str = Field(...,description="Short description of the action taken by the agent")
+    tool_input: Optional [str] = ""
+    tool_name: Optional [str] = ""
+    element_id: Optional[int] = None
+    messages: str = Field(
+        ...,
+        description="Short description of the action taken by the agent"
+    )
+
 class PlanOutput(BaseModel):
     plan: List[str] = Field(description="Ordered list of high-level browser actions")
     messages: str = Field(...,description="Short description of the action taken by the agent")

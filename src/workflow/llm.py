@@ -1,92 +1,72 @@
-#llm.py
-from dotenv import load_dotenv
+from __future__ import annotations
+
 import os
-from langchain_ollama import ChatOllama
+from typing import Any
+from functools import lru_cache
+
 from langchain_openai import ChatOpenAI
-import inspect
-from config import MODEL_NAME_OLLAMA,MODEL_NAME_OPENROUTER,OPENROUTER_API_KEY,BASE_URL
-# load_dotenv()
+from langchain_ollama import ChatOllama
 
-# def llm_call():
-#     llm = ChatOllama(
-#     model=MODEL_NAME_OLLAMA,
-#     temperature=0,
-#     max_retries=2,
-#     model_kwargs={"format": "json"}
-# )
-#     return llm
+import config
 
-# def llm_call():
-#     llm = ChatOpenAI(
-#             model_name=MODEL_NAME_OPENROUTER,
-#             base_url=BASE_URL,
-#             temperature=0.0,
-#             openai_api_key=OPENROUTER_API_KEY,
-#             max_retries=2,
-#         )
-#     return llm
 
-#llm.py
-import httpx
-import os
-from dotenv import load_dotenv
-from config import USERNAME, PASSWORD, LOGIN_URL, MODEL_URL, MODEL_NAME_OLLAMA
-import cloudpickle
-import dill, base64
-import io
+class LLMService:
 
-load_dotenv()
+    # ==========================================================================
+    # OpenAI
+    # ==========================================================================
+    def _create_openai(
+        self,
+        temperature: float = 0.0,
+        max_tokens: int | None = None,
+    ) -> ChatOpenAI:
+        return ChatOpenAI(
+            model=config.MODEL_NAME_OPENCODE,
+            api_key=config.OPENCODE_API_KEY,
+            base_url=config.OPENCODE_BASE_URL,
+            temperature=temperature,
+            reasoning_effort="high"
+        )
 
-class CustomLLMClient:
-    def __init__(self):
-        self.token = None
+    # ==========================================================================
+    # Ollama
+    # ==========================================================================
+    def _create_ollama(
+        self,
+        temperature: float = 0.0,
+        max_tokens: int | None = None,
+    ) -> ChatOllama:
+        return ChatOllama(
+            model=config.MODEL_NAME_OLLAMA,
+            temperature=temperature,
 
-    async def login(self):
-        async with httpx.AsyncClient() as client:
-            res = await client.post(
-                LOGIN_URL,
-                json={
-                    "username": USERNAME,
-                    "password": PASSWORD
-                },
-                headers={"accept": "application/json"}
-            )
-            res.raise_for_status()
-            data = res.json()
-            self.token = data.get("access_token") or data.get("token")
+        )
 
-    async def generate(self, system_prompt, user_prompt, structured=False, schema=None):
-        if not self.token:
-            await self.login()
-
-        payload = {
-            "model": MODEL_NAME_OLLAMA,
-            "system_prompt": system_prompt,
-            "user_prompt": user_prompt,
-            "structured": structured,
+    # ==========================================================================
+    # LLM Factory
+    # ==========================================================================
+    def create_llm(
+        self,
+        provider: str | None = None,
+        temperature: float = 0.0,
+        max_tokens: int | None = None,
+    ) -> Any:
+        providers = {
+            "openai": self._create_openai,
+            "ollama": self._create_ollama,
         }
-        # Only include output_schema when structured is True and schema is provided
-        import inspect  # add this, but better yet, refactor away from getsource
 
-        # Better: just send the schema as a dict
-        if structured and schema:
-            payload["output_schema"] = schema
-        # print("PAYLOAD BEING SENT:", payload)
-        async with httpx.AsyncClient(timeout=120) as client:
-            res = await client.post(
-                MODEL_URL,
-                headers={
-                    "accept": "application/json",
-                    "Authorization": f"Bearer {self.token}",
-                    "Content-Type": "application/json"
-                },
-                json=payload
-            )
+        provider = (provider or config.LLM_PROVIDER).lower()
 
-            if res.status_code == 401:
-                await self.login()
-                return await self.generate(system_prompt, user_prompt, structured, schema)
+        if provider not in providers:
+            raise ValueError(f"Unsupported LLM provider: {provider}")
 
-            res.raise_for_status()
-            return res.json()
+        return providers[provider](
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
 
+
+@lru_cache(maxsize=1)
+def get_llm() -> Any:
+    return LLMService().create_llm()
