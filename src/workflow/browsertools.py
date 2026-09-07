@@ -1,4 +1,6 @@
 from langchain.tools import tool
+from pydantic import BaseModel
+
 from src.workflow.browserplugin import Browser
 from logs import logger
 
@@ -45,18 +47,6 @@ async def navigate(url: str) -> str:
     return result
 
 
-@tool
-async def read_page(dummy: str = "") -> str:
-    """Read the current page content."""
-    logger.info("read_page called")
-    browser = await get_browser()
-    content = await browser.read()
-    logger.debug(f"Page content preview: {content[:200]}")
-    return content
-
-
-from pydantic import BaseModel
-
 class TypeTextInput(BaseModel):
     selector: str
     value: str
@@ -99,16 +89,6 @@ async def click_element(selector: str) -> str:
 
 
 @tool
-async def take_screenshot(filename: str = "screenshot.png") -> str:
-    """Take a screenshot of the current browser view."""
-    logger.info(f"take_screenshot called, saving to: {filename}")
-    browser = await get_browser()
-    result = await browser.screenshot(filename)
-    logger.info(f"Screenshot saved: {filename}")
-    return result
-
-
-@tool
 async def wait_seconds(seconds: str) -> str:
     """Wait for specified number of seconds."""
     logger.info(f"wait_seconds called for {seconds} seconds")
@@ -121,21 +101,3 @@ async def wait_seconds(seconds: str) -> str:
     except ValueError:
         logger.error(f"wait_seconds error: invalid number '{seconds}'")
         return f"Error: '{seconds}' is not a valid number"
-
-
-@tool
-async def finish_task(summary: str = "Task completed") -> str:
-    """Mark the task as finished."""
-    logger.info(f"finish_task called with summary: {summary}")
-    return f"TASK COMPLETED: {summary}"
-
-
-# Export all tools
-tools = [
-    navigate,
-    click_element,
-    type_text,
-    read_page,
-    type_and_enter,
-    finish_task
-]

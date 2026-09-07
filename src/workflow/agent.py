@@ -14,16 +14,16 @@ load_dotenv()
 from src.workflow.nodes import *
 from config import thread_dir_name 
 
-def agent_router(state: AgentState):
+def delegation_router(state: AgentState):
     route = state["agent_decision"]
     if route == "finish":
         return END
     if state["steps"] >= state["max_steps"]:
         return END
-    if route == "tools":
-        return "tools"
-    if route == "read_page":
-        return "read_page"
+    if route == "navigation":
+        return "navigation"
+    if route == "extract_information":
+        return "extract_information"
     if route == "wait":
         return "human_wait"
     return END
@@ -32,28 +32,42 @@ def agent_router(state: AgentState):
 graph = StateGraph(AgentState)
 
 graph.add_node("planner", planner_node)
-graph.add_node("agent", agent_node)
+graph.add_node("delegation", delegation)
+graph.add_node("navigation", navigation)
+graph.add_node("extract_information", extract_information)
 graph.add_node("tools", tool_execution_node)
 graph.add_node("read_page", observe_and_choose_node)
 graph.add_node("verifier", verifier_node)
 graph.add_node("human_wait", human_wait_node)
 
 graph.set_entry_point("planner")
-graph.add_edge("planner", "agent")
+graph.add_edge("planner", "delegation")
 graph.add_conditional_edges(
-    "agent",
-    agent_router,
+    "delegation",
+    delegation_router,
     {
-        "tools": "tools",
-        "read_page": "read_page",
+        "navigation": "navigation",
+        "extract_information": "extract_information",
         "human_wait": "human_wait",
         END: END,
     },
 )
-graph.add_edge("tools", "verifier")
-graph.add_edge("verifier", "agent")
-graph.add_edge("read_page", "agent")
-graph.add_edge("human_wait", "agent")
+# graph.add_edge("tools", "verifier")
+# graph.add_edge("verifier", "agent")
+# graph.add_edge("read_page", "agent")
+# graph.add_edge("human_wait", "agent")
+
+graph.add_edge("navigation", "verifier")
+
+
+graph.add_conditional_edges(
+    "verifier",
+    verifier_router,
+    {
+        "yes": "delegate",
+        "no": "navigation",
+    },
+)
 
 # ── Checkpointer is async, so compile happens inside get_app() ──
 _checkpointer = None

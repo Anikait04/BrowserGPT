@@ -52,7 +52,66 @@ async def planner_node(state: AgentState):
         "messages": result.messages,
     }
 
-async def agent_node(state: AgentState):
+
+async def delegation(state: AgentState):
+    logger.info("Planning high-level steps")
+
+    
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            ("system", NAVIGATION_PROMPT_V3),
+            (
+                "human",
+                """
+        GOAL:
+        {goal}
+
+        CURRENT PLAN STEP:
+        {current_action}
+
+        TOOL EXECUTION VEIFICATION:
+        {progress_verification}
+
+        STATUS:
+        - Step: {steps} / {max_steps}
+        - Current URL: {current_url}
+
+        {elements_info}
+        """,
+            ),
+        ]
+    )
+
+    chain = prompt | get_llm().with_structured_output(AgentDecision)
+
+    response = await chain.ainvoke(
+        {
+            "goal": state["goal"],
+            "current_action": state["current_action"],
+            "progress_verification": state["progress_verification"],
+            "steps": state["steps"],
+            "max_steps": state["max_steps"],
+            "current_url": state["current_url"] or "none",
+            "elements_info": elements_info,
+        }
+    )
+    print("agent_node response:::",response)
+    existing_messages = state.get("messages", [])
+    if not isinstance(existing_messages, list):
+        existing_messages = [existing_messages]
+    existing_messages.append(response.messages)
+    return {
+            **state,
+            "messages": existing_messages,
+            "agent_decision": response.route_decision,
+            "tool_name": response.tool_name,
+            "tool_input": response.tool_input,
+            "element_id": response.element_id,
+            "steps": state.get("steps", 0) + 1,
+            "current_action": state["current_action"],
+        }
+
+async def navigation(state: AgentState):
     logger.info("Started Agent Node")
     if state["steps"] >= state["max_steps"]:
         return {
