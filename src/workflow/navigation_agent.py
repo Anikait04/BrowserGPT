@@ -12,7 +12,7 @@ from src.workflow.browsertools import (
     type_text,
     wait_seconds,
 )
-from src.workflow.llm import get_llm
+from src.workflow.llm import get_llm, get_session_id
 from src.workflow.page_reader import read_page
 from src.workflow.prompt import NAVIGATION_AGENT_PROMPT
 
@@ -23,7 +23,7 @@ def _register_slim_harness_profile() -> None:
     """Register a slim harness profile so `create_deep_agent` ships without
     todo/filesystem/execute tools or the general-purpose subagent.
 
-    The profile is keyed by LLM provider (openai / ollama) which matches how
+    The profile is keyed by LLM provider (openai / ollama / groq / gemini) which matches how
     `get_llm()` instances resolve. Re-registration merges, so this is idempotent.
     """
     global _profile_registered
@@ -51,7 +51,7 @@ def _register_slim_harness_profile() -> None:
         general_purpose_subagent=GeneralPurposeSubagentProfile(enabled=False),
     )
 
-    for provider_key in ("openai", "ollama"):
+    for provider_key in ("openai", "ollama", "groq", "gemini"):
         register_harness_profile(provider_key, slim_profile)
 
     _profile_registered = True
@@ -83,17 +83,25 @@ def build_navigation_agent():
 
 
 _cached_agent = None
+_cached_session_id = None
 
 
 def get_navigation_agent():
-    """Module-level cache wrapper — rebuilds only if never built."""
-    global _cached_agent
-    if _cached_agent is None:
+    """Module-level cache wrapper — rebuilds on first use or session change.
+
+    The agent holds a session-bound LLM client, so a new run (new thread_id)
+    needs a fresh agent; otherwise calls would carry the previous run's session.
+    """
+    global _cached_agent, _cached_session_id
+    session_id = get_session_id()
+    if _cached_agent is None or _cached_session_id != session_id:
         _cached_agent = build_navigation_agent()
+        _cached_session_id = session_id
     return _cached_agent
 
 
 def reset_navigation_agent():
     """Drop the cached agent (used by tests)."""
-    global _cached_agent
+    global _cached_agent, _cached_session_id
     _cached_agent = None
+    _cached_session_id = None

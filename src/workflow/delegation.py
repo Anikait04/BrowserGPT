@@ -23,9 +23,17 @@ def _format_plan(entire_plan: list, step_count: int) -> str:
 async def delegation_node(state: AgentState) -> dict:
     """Route the next unit of work to navigation / extract_information / wait_for_user / finish.
 
+    Persistent-loop contract: "finish" does NOT terminate the process — routing
+    sends it to wait_for_user so the user reviews the result and issues the next
+    task. Only an explicit user exit command (in wait_for_user) ends the run.
+
     Deterministic overrides run before any LLM call:
-    1. max steps reached -> finish
-    2. previous verification reported failure or failure streak hit the cap -> finish with failure
+    1. max steps reached -> finish (then wait_for_user asks the user what to do next)
+    2. last verification failed AND the consecutive-failure streak hit the cap
+       (consecutive_failures >= MAX_CONSECUTIVE_FAILURES) -> finish with failure
+       (then wait_for_user asks the user what to do next).
+       A failure with retry budget remaining falls through to the LLM, which
+       re-delegates the same task with verification feedback.
     """
     goal = state.get("goal", "")
     entire_plan = state.get("entire_plan", []) or []
@@ -52,13 +60,16 @@ async def delegation_node(state: AgentState) -> dict:
             "final_response": f"Stopped after reaching the maximum of {max_steps} steps.",
         }
 
-    # ── Deterministic override 2: unrecoverable failure on the delegated task ──
-    prev_reported_failure = (
-        bool(verification_result)
-        and not verification_result.get("completed", False)
-        and verification_result.get("next_action") == "report_failure"
+    # ── Deterministic override 2: last verification failed AND the failure streak
+    # hit the cap -> finish with failure. A failure with retry budget remaining is
+    # NOT terminal: fall through so the LLM re-delegates the same task with
+    # verification feedback (DELEGATION_PROMPT rule 3). The verifier's
+    # report_failure alone never finishes the run; only the streak cap does.
+    last_failed = bool(verification_result) and not verification_result.get(
+        "completed", False
     )
-    if prev_reported_failure or consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
+    streak_capped = consecutive_failures >= MAX_CONSECUTIVE_FAILURES
+    if last_failed and streak_capped:
         reason = verification_result.get("reason", "no reason given")
         logger.warning(
             f"[DELEGATION] Failure cap reached for task {current_delegated_task!r} "

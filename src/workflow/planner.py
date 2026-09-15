@@ -9,6 +9,7 @@ from src.workflow.prompt import PLANNER_PROMPT_V2
 from src.workflow.schemas import Plan
 
 
+
 async def planner_node(state: AgentState) -> dict:
     """Break the user's goal into an ordered list of high-level steps."""
     logger.info("[PLANNER] Creating execution plan")

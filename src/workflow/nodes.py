@@ -6,7 +6,6 @@ from langgraph.types import interrupt
 from langchain_core.messages import HumanMessage,AIMessage,ToolMessage
 from langchain_core.prompts import ChatPromptTemplate
 from src.workflow.agent_state import AgentState
-from src.workflow.utils import plan_steps_update
 from src.workflow.browsertools import tools, get_browser
 from src.workflow.prompt import (
     NAVIGATION_PROMPT,
@@ -20,9 +19,7 @@ from src.workflow.prompt import (
 from logs import logger
 from typing import cast
 from langgraph.prebuilt import ToolNode
-from src.workflow.structured import AgentDecision, DOMElement, PlanOutput
 import re
-from src.workflow.utils import plan_steps_update
 from config import _PAGE_CACHE
 from src.workflow.llm import get_llm
 load_dotenv()
