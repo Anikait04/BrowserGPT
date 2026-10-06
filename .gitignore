@@ -9,6 +9,7 @@ agent_flow_ipynb.png
 test.ipynb
 .vscode
 /save_agentThread
+/artifacts
 elements.txt
 plan
 tests

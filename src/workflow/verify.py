@@ -1,13 +1,77 @@
 # verify.py — verify node: strict structured judge of the delegated task.
 
+from langchain_core.exceptions import OutputParserException
 from langchain_core.prompts import ChatPromptTemplate
+from pydantic import ValidationError
 
 from config import MAX_CONSECUTIVE_FAILURES, MAX_NAVIGATION_ITERATIONS
 from logs import logger
 from src.workflow.agent_state import AgentState
 from src.workflow.llm import get_llm
+from src.workflow.planner import _extract_json
 from src.workflow.prompt import VERIFY_PROMPT
 from src.workflow.schemas import VerificationResult
+
+
+_TRUE_TOKENS = {"true", "yes", "completed", "complete", "success", "done", "1"}
+_FALSE_TOKENS = {"false", "no", "incomplete", "failure", "failed", "0"}
+
+
+def _to_bool(value: object) -> bool | None:
+    """Best-effort bool conversion; None when undecidable."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        token = value.strip().lower()
+        if token in _TRUE_TOKENS:
+            return True
+        if token in _FALSE_TOKENS:
+            return False
+    return None
+
+
+def _coerce_to_verdict(raw: object) -> VerificationResult:
+    """Best-effort conversion of loose LLM output into a VerificationResult.
+
+    Handles near-miss keys (complete/success/verdict, justification, ...).
+    Never raises: undecidable input degrades to incomplete + continue_task
+    (bounded retry) instead of crashing the run.
+    """
+    if isinstance(raw, VerificationResult):
+        return raw
+    if isinstance(raw, dict):
+        # Direct validation first (covers aliases via model_config).
+        try:
+            return VerificationResult.model_validate(raw)
+        except ValidationError:
+            pass
+        completed_raw = raw.get(
+            "completed",
+            raw.get("complete", raw.get("success", raw.get("verdict", None))),
+        )
+        completed = _to_bool(completed_raw)
+        if completed is None:
+            completed = False
+        reason = raw.get("reason", raw.get("justification", raw.get("explanation", ""))) or ""
+        next_action = str(raw.get("next_action", "") or "").strip().lower()
+        if next_action not in ("continue_task", "report_failure"):
+            next_action = "continue_task"
+        return VerificationResult(
+            completed=completed,
+            reason=str(reason),
+            next_action=next_action,  # type: ignore[arg-type]
+        )
+    if isinstance(raw, str):
+        parsed = _extract_json(raw)
+        if parsed is not None:
+            return _coerce_to_verdict(parsed)
+    return VerificationResult(
+        completed=False,
+        reason="verifier output unparseable; retrying navigation",
+        next_action="continue_task",
+    )
 
 
 def _is_search_engine_criteria(criteria: str) -> bool:
@@ -141,24 +205,61 @@ RECENT ACTIONS HISTORY:
 
         chain = prompt | get_llm().with_structured_output(VerificationResult)
 
-        verdict: VerificationResult = await chain.ainvoke(
-            {
-                "task": task or "(none)",
-                "criteria": criteria or "(not specified - infer from the task)",
-                "goal": goal or "(none)",
-                "plan": "\n".join(
-                    f"[{'x' if i < step_count else ' '}] {i + 1}. {step}"
-                    for i, step in enumerate(entire_plan)
+        invoke_args = {
+            "task": task or "(none)",
+            "criteria": criteria or "(not specified - infer from the task)",
+            "goal": goal or "(none)",
+            "plan": "\n".join(
+                f"[{'x' if i < step_count else ' '}] {i + 1}. {step}"
+                for i, step in enumerate(entire_plan)
+            )
+            or "(no plan steps)",
+            "step_count": step_count,
+            "total_steps": len(entire_plan),
+            "navigation_result": navigation_result or "(no report)",
+            "current_url": current_url or "(unknown)",
+            "snapshot": snapshot,
+            "all_actions": "\n".join(all_actions[-15:]) or "(none recorded)",
+        }
+
+        verdict: VerificationResult | None = None
+
+        # 1) Preferred path: structured output (aliases handle near-miss keys).
+        try:
+            verdict = await chain.ainvoke(invoke_args)
+            if isinstance(verdict, dict):
+                verdict = _coerce_to_verdict(verdict)
+        except (OutputParserException, ValidationError) as e:
+            logger.warning(f"[VERIFY] Structured output failed ({e}); trying raw-JSON fallback")
+            verdict = None
+        except Exception as e:
+            logger.warning(f"[VERIFY] Verifier LLM call failed ({e}); trying raw-JSON fallback")
+            verdict = None
+
+        # 2) Fallback: plain LLM call + manual JSON extraction + alias mapping.
+        if verdict is None:
+            try:
+                raw_chain = prompt | get_llm()
+                raw_msg = await raw_chain.ainvoke(invoke_args)
+                raw_text = getattr(raw_msg, "content", str(raw_msg))
+                if isinstance(raw_text, list):
+                    raw_text = " ".join(
+                        part.get("text", "") if isinstance(part, dict) else str(part)
+                        for part in raw_text
+                    )
+                parsed = _extract_json(str(raw_text))
+                verdict = _coerce_to_verdict(parsed if parsed is not None else raw_text)
+                logger.warning(
+                    f"[VERIFY] Raw fallback produced: completed={verdict.completed!r} "
+                    f"next_action={verdict.next_action!r}"
                 )
-                or "(no plan steps)",
-                "step_count": step_count,
-                "total_steps": len(entire_plan),
-                "navigation_result": navigation_result or "(no report)",
-                "current_url": current_url or "(unknown)",
-                "snapshot": snapshot,
-                "all_actions": "\n".join(all_actions[-15:]) or "(none recorded)",
-            }
-        )
+            except Exception as e:
+                logger.error(f"[VERIFY] Raw fallback also failed ({e}); retrying task")
+                verdict = VerificationResult(
+                    completed=False,
+                    reason="verifier output unparseable; retrying navigation",
+                    next_action="continue_task",
+                )
 
         if verdict.completed:
             logger.info("[VERIFY] Task completed")

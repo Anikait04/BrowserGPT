@@ -67,17 +67,24 @@ BrowserGPT/
 ├── config.py               # Environment config and constants
 ├── logs.py                 # Centralized logging (IST timezone, monthly folders)
 ├── src/
+│   ├── router_app.py   # FastAPI app with CORS
 │   ├── workflow/
 │   │   ├── agent.py        # LangGraph graph definition and run loop
 │   │   ├── agent_state.py  # TypedDict state schema
-│   │   ├── nodes.py        # All graph node implementations
-│   │   ├── llm.py          # Custom LLM client (token auth, structured output)
-│   │   ├── prompt.py       # System prompts for planner, navigator, DOM selector
+│   │   ├── planner.py      # High-level plan generation node
+│   │   ├── delegation.py   # Routes work to navigation/extract/wait/finish
+│   │   ├── navigation.py   # Browser navigation node (deep agent loop)
+│   │   ├── navigation_agent.py # Deep navigation agent (tool loop)
+│   │   ├── verify.py       # Verifier node for delegated tasks
+│   │   ├── extract_information.py # Extraction node (skeleton)
+│   │   ├── wait_for_user.py# Human-interrupt node (persistent loop)
+│   │   ├── routing.py      # Conditional-edge routing helpers
+│   │   ├── llm.py          # LLM clients per provider + session binding
+│   │   ├── prompt.py       # System prompts (planner, delegation, verify, nav)
+│   │   ├── schemas.py      # Pydantic schemas for structured outputs
 │   │   ├── browserplugin.py# Playwright Browser wrapper
-│   │   ├── browsertools.py # LangChain tools exposed to the agent
-│   │   ├── structured.py   # Pydantic/TypedDict schemas for LLM responses
-│   │   ├── router_app.py   # FastAPI app with CORS
-│   │   └── utils.py        # Plan step helper
+│   │   ├── browsertools.py # Browser access + LangChain tools
+│   │   └── page_reader.py  # LLM-free page observation (read_page tool)
 │   └── routers/
 │       └── agent_router.py # API endpoints (/run-agent, /stream-agent)
 ├── frontend/

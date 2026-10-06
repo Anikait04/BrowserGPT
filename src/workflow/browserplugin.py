@@ -75,10 +75,6 @@ class Browser:
             logger.info(f"Clicked: {selector}")
             return f"Successfully clicked element: {selector}"
 
-        except Exception as e:
-            logger.error(f"Click error on selector: {selector}")
-            return f"Click error: {selector}"
-            
         except PlaywrightTimeoutError:
             alternatives = self._get_alternative_selectors(selector)
             for alt in alternatives:
@@ -89,7 +85,7 @@ class Browser:
                     return f"Clicked element using alternative selector: {alt}"
                 except Exception:
                     continue
-            
+
             logger.error(f"Could not find clickable element: {selector}")
             return f"Could not find clickable element: {selector}"
         except Exception:
@@ -217,17 +213,6 @@ class Browser:
         except Exception:
             logger.exception("Read error")
             return "Read error occurred"
-
-    async def screenshot(self, path: str = "screenshot.png") -> str:
-        """Take a screenshot"""
-        try:
-            logger.info(f"Taking screenshot: {path}")
-            await self.page.screenshot(path=path, full_page=False)
-            logger.info(f"Screenshot saved: {path}")
-            return f"Screenshot saved to {path}"
-        except Exception:
-            logger.exception("Screenshot error")
-            return "Screenshot error occurred"
 
     async def wait(self, seconds: float = 1.0) -> str:
         logger.debug(f"Waiting for {seconds} seconds")

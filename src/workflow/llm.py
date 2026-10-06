@@ -77,6 +77,8 @@ class LLMService:
         return ChatOllama(
             model=config.MODEL_NAME_OLLAMA,
             temperature=temperature,
+            api_key=config.OLLAMA_API_KEY,
+            base_url=config.OLLAMA_BASE_URL,
         )
 
     # ==========================================================================
@@ -99,6 +101,39 @@ class LLMService:
             max_tokens=max_tokens,
             # NOTE: no reasoning_effort (OpenAI-only) and no x-opencode-*
             # headers (OpenCode-Go-only) — Groq rejects unknown fields.
+        )
+
+    # ==========================================================================
+    # JEV / codiv.ai (OpenAI-compatible endpoint — browser navigation only)
+    # ==========================================================================
+    def _create_jev(
+        self,
+        temperature: float = 0.0,
+        max_tokens: int | None = None,
+    ) -> ChatOpenAI:
+
+        if not config.JEV_API_KEY:
+            raise ValueError("JEV_API_KEY is not set (required for provider 'jev')")
+
+        # Normalize: codiv.ai OpenAI-compatible API lives under /v1. A bare
+        # host (e.g. legacy TYPESAFE_BASE_URL without /v1) gets it appended.
+        base_url = (config.JEV_BASE_URL or "").rstrip("/")
+        if not base_url.endswith("/v1"):
+            base_url = base_url + "/v1"
+
+        # NOTE: no response_format={"type": "json_object"} here. Probes against
+        # diffusiongemma-26b show a global json_object response_format breaks
+        # bind_tools ("only `strict` function tools can be auto-parsed"), while
+        # a plain client supports BOTH bind_tools and with_structured_output.
+        # LangChain structures JSON via function-calling under the hood, so the
+        # snippet's response_format pattern only applies to raw OpenAI usage.
+        # Also no reasoning_effort / x-opencode-* headers — codiv rejects them.
+        return ChatOpenAI(
+            model=config.JEV_MODEL_NAME,
+            api_key=config.JEV_API_KEY,
+            base_url=base_url,
+            temperature=temperature,
+            max_tokens=max_tokens if max_tokens is not None else config.JEV_MAX_TOKENS,
         )
 
     # ==========================================================================
@@ -136,6 +171,7 @@ class LLMService:
             "ollama": self._create_ollama,
             "groq": self._create_groq,
             "gemini": self._create_gemini,
+            "jev": self._create_jev,
         }
 
         provider = (provider or config.LLM_PROVIDER).lower()
@@ -164,6 +200,24 @@ def get_llm() -> Any:
     llm = _llm_cache.get(key)
     if llm is None:
         llm = LLMService(session_id=get_session_id()).create_llm(provider)
+        if len(_llm_cache) >= _LLM_CACHE_MAX:
+            _llm_cache.pop(next(iter(_llm_cache)))
+        _llm_cache[key] = llm
+    return llm
+
+
+def get_navigation_llm() -> Any:
+    """Return the JEV (codiv.ai) client for the browser navigation deep-agent.
+
+    Pinned to provider 'jev' regardless of the global LLM_PROVIDER, so
+    planner / delegation / verify keep their current model while only
+    navigation drives diffusiongemma-26b. Cached per session like get_llm().
+    """
+    session_id = get_session_id() or "default"
+    key = ("jev", session_id)
+    llm = _llm_cache.get(key)
+    if llm is None:
+        llm = LLMService(session_id=get_session_id()).create_llm("jev")
         if len(_llm_cache) >= _LLM_CACHE_MAX:
             _llm_cache.pop(next(iter(_llm_cache)))
         _llm_cache[key] = llm

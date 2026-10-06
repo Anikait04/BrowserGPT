@@ -112,12 +112,26 @@ def _build_initial_state(goal: str, max_steps: int, task_id: str | None) -> Agen
         "navigation_result": "",
         "verification_result": None,
         "extracted_information": None,
+        "extraction_format": "",
+        "artifact_id": None,
+        "artifact_path": None,
         "waiting_for_user": False,
         "exit_requested": False,
         "final_response": "",
         "navigation_iterations": 0,
         "consecutive_failures": 0,
         "all_actions": [],
+    }
+
+
+def _artifact_info(values: dict) -> dict:
+    """Artifact download info for API responses (empty when no detailed PDF)."""
+    artifact_id = (values or {}).get("artifact_id")
+    if not artifact_id:
+        return {}
+    return {
+        "artifact_id": artifact_id,
+        "artifact_url": f"/nav/artifact/{artifact_id}",
     }
 
 
@@ -165,6 +179,7 @@ async def run_agent_server(
                 "goal": values.get("goal", goal),
                 "final_response": values.get("final_response", ""),
                 "current_url": values.get("current_url", ""),
+                **_artifact_info(values),
             }
         # END — only reachable after explicit user exit.
         if task_id:
@@ -176,6 +191,7 @@ async def run_agent_server(
             "thread_id": thread_id,
             "final_response": values.get("final_response", ""),
             "current_url": values.get("current_url", ""),
+            **_artifact_info(values),
         }
     except Exception as e:
         if task_id:
@@ -225,6 +241,7 @@ async def resume_agent_server(
                 "goal": values.get("goal", ""),
                 "final_response": values.get("final_response", ""),
                 "current_url": values.get("current_url", ""),
+                **_artifact_info(values),
             }
         if task_id:
             from src.routers.agent_router import push_done
@@ -235,6 +252,7 @@ async def resume_agent_server(
             "thread_id": thread_id,
             "final_response": values.get("final_response", ""),
             "current_url": values.get("current_url", ""),
+            **_artifact_info(values),
         }
     except Exception as e:
         if task_id:
@@ -275,6 +293,9 @@ async def run_agent(goal: str, max_steps: int = 30, thread_id: str = None, task_
         "navigation_result": "",
         "verification_result": None,
         "extracted_information": None,
+        "extraction_format": "",
+        "artifact_id": None,
+        "artifact_path": None,
         "waiting_for_user": False,
         "exit_requested": False,
         "final_response": "",

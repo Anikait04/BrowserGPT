@@ -22,7 +22,10 @@ class AgentState(TypedDict):
     success_criteria: str                    # concrete checkable condition for verify
     navigation_result: str                   # final message reported by the deep navigation agent
     verification_result: Optional[dict]      # serialized VerificationResult
-    extracted_information: Optional[str]     # output of extract_information node (skeleton)
+    extracted_information: Optional[str]     # overview text or detailed-report summary
+    extraction_format: str                    # "overview" | "detailed" | "" (not run yet)
+    artifact_id: Optional[str]               # download id for the detailed PDF (None unless detailed)
+    artifact_path: Optional[str]             # filesystem path of the detailed PDF
     waiting_for_user: bool                   # True while paused in wait_for_user node
     exit_requested: bool                   # True only when user explicitly asked to exit the loop
     final_response: str                      # answer returned to the user at finish

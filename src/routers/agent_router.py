@@ -1,11 +1,13 @@
 import asyncio
 import json
+import os
 import uuid
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 from typing import Optional
 
+import config
 from src.workflow.agent import resume_agent_server, run_agent_server
 from logs import logger
 
@@ -86,12 +88,14 @@ async def _stream_until_agent_done(queue: asyncio.Queue, agent_task: asyncio.Tas
                         "prompt": result.get("prompt", ""),
                         "final_response": result.get("final_response", ""),
                         "current_url": result.get("current_url", ""),
+                        **({k: result[k] for k in ("artifact_id", "artifact_url") if result.get(k)}),
                     })
                 elif result.get("status") == "done":
                     yield sse_event({
                         "type": "done",
                         "message": result.get("final_response") or "Session ended",
                         "thread_id": result.get("thread_id"),
+                        **({k: result[k] for k in ("artifact_id", "artifact_url") if result.get(k)}),
                     })
                 else:
                     yield sse_event({"type": "done", "message": "Agent finished"})
@@ -181,10 +185,10 @@ async def stream_resume(request: ResumeRequest):
     )
 
 
-# ── Push helper — called from nodes.py after each tool execution ──────────────
+# ── Push helper — call after each browser action to stream SSE screenshots ────
 async def push_screenshot(task_id: str, screenshot_b64: str, step: int, max_steps: int = 30, action: str = "", url: str = "", message: str = ""):
     """
-    Call this from tool_execution_node after each browser action.
+    Call this after each browser action to push a screenshot event to the stream.
     """
     queue = get_screenshot_queue(task_id)
     if queue:
@@ -195,6 +199,19 @@ async def push_screenshot(task_id: str, screenshot_b64: str, step: int, max_step
             "action": action,
             "max_steps": max_steps,   # ← add this
             "url": url,
+            "message": message,
+        })
+
+
+async def push_artifact(task_id: str, artifact_id: str, url: str, title: str = "", message: str = ""):
+    """Push a generated-artifact (detailed PDF) event to the SSE stream."""
+    queue = get_screenshot_queue(task_id)
+    if queue:
+        await queue.put({
+            "type": "artifact",
+            "artifact_id": artifact_id,
+            "url": url,
+            "title": title,
             "message": message,
         })
 
@@ -269,6 +286,29 @@ async def resume_agent_endpoint(request: ResumeRequest):
     except Exception as e:
         logger.exception("Agent resume failed")
         raise HTTPException(status_code=500, detail="Agent resume failed")
+
+
+@router.get("/artifact/{artifact_id}")
+async def download_artifact(artifact_id: str):
+    """Download a generated artifact (detailed PDF report).
+
+    Files live under ARTIFACTS_DIR/<thread_id>/<artifact_id>.pdf. The id is
+    restricted to hex characters so no path traversal is possible.
+    """
+    if not artifact_id or not all(c in "0123456789abcdefABCDEF" for c in artifact_id):
+        raise HTTPException(status_code=400, detail="Invalid artifact id")
+
+    base_dir = os.path.abspath(config.ARTIFACTS_DIR)
+    filename = f"{artifact_id}.pdf"
+    for entry in os.listdir(base_dir) if os.path.isdir(base_dir) else []:
+        candidate = os.path.abspath(os.path.join(base_dir, entry, filename))
+        if os.path.isfile(candidate) and candidate.startswith(base_dir + os.sep):
+            return FileResponse(
+                candidate,
+                media_type="application/pdf",
+                filename=f"report-{artifact_id[:8]}.pdf",
+            )
+    raise HTTPException(status_code=404, detail="Artifact not found")
 
 
 @router.get("/")

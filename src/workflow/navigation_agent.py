@@ -12,7 +12,7 @@ from src.workflow.browsertools import (
     type_text,
     wait_seconds,
 )
-from src.workflow.llm import get_llm, get_session_id
+from src.workflow.llm import get_navigation_llm, get_session_id
 from src.workflow.page_reader import read_page
 from src.workflow.prompt import NAVIGATION_AGENT_PROMPT
 
@@ -23,8 +23,9 @@ def _register_slim_harness_profile() -> None:
     """Register a slim harness profile so `create_deep_agent` ships without
     todo/filesystem/execute tools or the general-purpose subagent.
 
-    The profile is keyed by LLM provider (openai / ollama / groq / gemini) which matches how
-    `get_llm()` instances resolve. Re-registration merges, so this is idempotent.
+    The profile is keyed by LLM provider (openai / ollama / groq / gemini / jev)
+    which matches how `get_llm()` / `get_navigation_llm()` instances resolve.
+    Re-registration merges, so this is idempotent.
     """
     global _profile_registered
     if _profile_registered:
@@ -51,22 +52,22 @@ def _register_slim_harness_profile() -> None:
         general_purpose_subagent=GeneralPurposeSubagentProfile(enabled=False),
     )
 
-    for provider_key in ("openai", "ollama", "groq", "gemini"):
+    for provider_key in ("openai", "ollama", "groq", "gemini", "jev", "codiv", "typesafe"):
         register_harness_profile(provider_key, slim_profile)
 
     _profile_registered = True
 
 
 def build_navigation_agent():
-    """Build (and cache) the deep navigation agent."""
+    """Build (and cache) the deep navigation agent (JEV / codiv.ai model)."""
     from deepagents import create_deep_agent
 
     _register_slim_harness_profile()
 
-    logger.info("[NAVIGATION] Building deep navigation agent")
+    logger.info("[NAVIGATION] Building deep navigation agent (jev)")
 
     agent = create_deep_agent(
-        model=get_llm(),
+        model=get_navigation_llm(),
         tools=[
             navigate,
             click_element,
