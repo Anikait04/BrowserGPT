@@ -86,7 +86,10 @@ BrowserGPT/
 │   │   ├── browsertools.py # Browser access + LangChain tools
 │   │   └── page_reader.py  # LLM-free page observation (read_page tool)
 │   └── routers/
-│       └── agent_router.py # API endpoints (/run-agent, /stream-agent)
+│       ├── common.py       # Shared models + SSE queue/push helpers
+│       ├── nav_router.py   # POST /nav/run, POST /nav/resume, GET /nav/
+│       ├── stream_router.py# POST /stream/agent, POST /stream/resume (SSE)
+│       └── extract_router.py # GET /extract/artifact/{id}
 ├── frontend/
 │   └── index.html          # Cyberpunk-themed SPA
 ├── Dockerfile
@@ -176,11 +179,14 @@ The container uses **Xvfb** (virtual framebuffer) for headless browser rendering
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/nav/run-agent` | Blocking — runs the agent to completion |
-| `POST` | `/nav/stream-agent` | Streaming — SSE stream of screenshots, steps, and status |
+| `POST` | `/nav/run` | Blocking JSON — runs the agent to completion |
+| `POST` | `/nav/resume` | Blocking JSON — resume a paused run |
+| `POST` | `/stream/agent` | Streaming — SSE stream of screenshots, steps, and status |
+| `POST` | `/stream/resume` | Streaming — resume a paused run via SSE |
+| `GET` | `/extract/artifact/{artifact_id}` | Download a generated PDF report |
 | `GET` | `/nav/` | Health check |
 
-### POST /nav/stream-agent
+### POST /stream/agent
 
 ```json
 {

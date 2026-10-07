@@ -9,13 +9,14 @@
 
 from langgraph.graph import END
 
-from logs import logger
+from src.logs import logger
 from src.workflow.agent_state import AgentState
 
 
 def route_from_delegation(state: AgentState) -> str:
-    """Route after the delegation node.
+    """Route after the delegation node (the graph entry point and single router).
 
+    - "planner" -> planner (no plan yet: fresh goal or cleared new task)
     - "finish" -> wait_for_user (NOT END: ask the user for the next task;
       only an explicit user exit ends the run)
     - max steps reached -> wait_for_user (let the user decide: retry / new task / exit)
@@ -33,6 +34,8 @@ def route_from_delegation(state: AgentState) -> str:
         logger.warning("[ROUTING] Max steps reached, pausing for user instead of ending")
         return "wait_for_user"
 
+    if route == "planner":
+        return "planner"
     if route == "navigation":
         return "navigation"
     if route == "extract_information":
@@ -48,18 +51,14 @@ def route_from_wait_for_user(state: AgentState) -> str:
     """Route after the wait_for_user node — the ONLY gateway to END.
 
     - exit_requested=True (user typed exit/quit/stop/...) -> END
-    - fresh user task (plan cleared by the wait node) -> planner
-    - otherwise -> delegation (resume current goal with human guidance)
+    - otherwise -> delegation (the single router: empty plan from a fresh
+      user task routes to planner there; anything else resumes the goal)
     """
     if state.get("exit_requested"):
         logger.info("[ROUTING] User requested exit, ending run")
         return END
 
-    if not state.get("entire_plan"):
-        logger.info("[ROUTING] New user task pending, replanning")
-        return "planner"
-
-    logger.info("[ROUTING] Resuming with user input, returning to delegation")
+    logger.info("[ROUTING] Returning to delegation")
     return "delegation"
 
 

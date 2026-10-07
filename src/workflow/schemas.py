@@ -33,7 +33,7 @@ class DelegationDecision(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True, extra="ignore")
 
-    action: Literal["navigation", "extract_information", "wait_for_user", "finish"] = Field(
+    action: Literal["planner", "navigation", "extract_information", "wait_for_user", "finish"] = Field(
         validation_alias=AliasChoices("action", "component", "route_decision"),
         description="Which component should handle the next unit of work",
     )
@@ -47,6 +47,14 @@ class DelegationDecision(BaseModel):
         description=(
             "Concrete, checkable condition describing when the delegated task is complete, "
             "e.g. 'URL contains /results AND a results grid is visible'"
+        ),
+    )
+    user_prompt: str = Field(
+        default="",
+        description=(
+            "Exact user-facing question/message for the human, used ONLY when action "
+            "is wait_for_user (ambiguous request or follow-up question). The wait "
+            "node displays this verbatim. Empty for all other actions."
         ),
     )
 

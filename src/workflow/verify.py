@@ -4,8 +4,8 @@ from langchain_core.exceptions import OutputParserException
 from langchain_core.prompts import ChatPromptTemplate
 from pydantic import ValidationError
 
-from config import MAX_CONSECUTIVE_FAILURES, MAX_NAVIGATION_ITERATIONS
-from logs import logger
+from src.config import MAX_CONSECUTIVE_FAILURES, MAX_NAVIGATION_ITERATIONS
+from src.logs import logger
 from src.workflow.agent_state import AgentState
 from src.workflow.llm import get_llm
 from src.workflow.planner import _extract_json

@@ -4,7 +4,7 @@
 # built-in todo / filesystem / execute tools and disables the general-purpose
 # subagent, so the agent is exactly: browser tools + read_page + the LLM.
 
-from logs import logger
+from src.logs import logger
 from src.workflow.browsertools import (
     click_element,
     navigate,
