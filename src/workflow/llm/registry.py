@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import contextvars
 from typing import Any
 import uuid
 
@@ -8,30 +7,24 @@ from langchain_openai import ChatOpenAI
 from langchain_ollama import ChatOllama
 from langchain_google_genai import ChatGoogleGenerativeAI
 
-import config
+import src.config as config
 
-
-# ── Run-scoped LLM session ────────────────────────────────────────────────────
-# run_agent() sets this to the LangGraph thread_id, so every LLM call in the run
-# carries that thread_id as its session id (x-opencode-session header).
-_current_session_id: contextvars.ContextVar[str | None] = contextvars.ContextVar(
-    "llm_session_id", default=None
+from src.workflow.llm.session import (
+    get_session_id,
+    reset_session_id,
+    set_session_id,
 )
 
-
-def set_session_id(session_id: str | None) -> contextvars.Token:
-    """Bind subsequent get_llm() clients to session_id. Returns a token for reset."""
-    return _current_session_id.set(session_id)
-
-
-def reset_session_id(token: contextvars.Token) -> None:
-    """Undo a set_session_id() call."""
-    _current_session_id.reset(token)
-
-
-def get_session_id() -> str | None:
-    """Current run's session id (thread_id), or None outside a run."""
-    return _current_session_id.get()
+__all__ = [
+    "LLMService",
+    "SUPPORTED_PROVIDERS",
+    "get_llm",
+    "get_navigation_llm",
+    "reset_llm_cache",
+    "get_session_id",
+    "set_session_id",
+    "reset_session_id",
+]
 
 
 class LLMService:
@@ -191,10 +184,15 @@ class LLMService:
 _LLM_CACHE_MAX = 8
 _llm_cache: dict[tuple[str, str], Any] = {}
 
+# Single registry of supported provider keys (mirrors LLMService.create_llm).
+# navigation_agent harness profiles must stay in sync — see
+# navigation_agent._HARNESS_PROVIDER_KEYS.
+SUPPORTED_PROVIDERS: tuple[str, ...] = ("openai", "ollama", "groq", "gemini", "jev")
 
-def get_llm() -> Any:
-    """Return an LLM client bound to the current run's session (thread_id)."""
-    provider = (config.LLM_PROVIDER or "openai").lower()
+
+def _cached_llm(provider: str) -> Any:
+    """Shared per-(provider, session) cache lookup/creation."""
+    provider = (provider or "openai").lower()
     session_id = get_session_id() or "default"
     key = (provider, session_id)
     llm = _llm_cache.get(key)
@@ -206,6 +204,12 @@ def get_llm() -> Any:
     return llm
 
 
+def get_llm() -> Any:
+    """Return an LLM client bound to the current run's session (thread_id)."""
+    provider = (config.LLM_PROVIDER or "openai").lower()
+    return _cached_llm(provider)
+
+
 def get_navigation_llm() -> Any:
     """Return the JEV (codiv.ai) client for the browser navigation deep-agent.
 
@@ -213,15 +217,7 @@ def get_navigation_llm() -> Any:
     planner / delegation / verify keep their current model while only
     navigation drives diffusiongemma-26b. Cached per session like get_llm().
     """
-    session_id = get_session_id() or "default"
-    key = ("jev", session_id)
-    llm = _llm_cache.get(key)
-    if llm is None:
-        llm = LLMService(session_id=get_session_id()).create_llm("jev")
-        if len(_llm_cache) >= _LLM_CACHE_MAX:
-            _llm_cache.pop(next(iter(_llm_cache)))
-        _llm_cache[key] = llm
-    return llm
+    return _cached_llm("jev")
 
 
 def reset_llm_cache() -> None:

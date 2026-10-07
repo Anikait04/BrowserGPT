@@ -1,11 +1,11 @@
-# navigation_agent.py — builds the slim deep agent that owns the browser tools.
+# factory.py — builds the slim deep agent that owns the browser tools (canonical).
 #
 # Uses `deepagents.create_deep_agent` with a harness profile that excludes the
 # built-in todo / filesystem / execute tools and disables the general-purpose
 # subagent, so the agent is exactly: browser tools + read_page + the LLM.
 
-from src.logs import logger
-from src.workflow.browsertools import (
+from logs import logger
+from src.workflow.browser.tools import (
     click_element,
     navigate,
     type_and_enter,
@@ -13,8 +13,20 @@ from src.workflow.browsertools import (
     wait_seconds,
 )
 from src.workflow.llm import get_navigation_llm, get_session_id
-from src.workflow.page_reader import read_page
-from src.workflow.prompt import NAVIGATION_AGENT_PROMPT
+from src.workflow.browser.observation import read_page
+from src.workflow.prompts.navigation import NAVIGATION_AGENT_PROMPT
+
+# Provider keys needing the slim harness profile. Core keys mirror
+# llm.SUPPORTED_PROVIDERS; legacy aliases kept for back-compat models.
+_HARNESS_PROVIDER_KEYS: tuple[str, ...] = (
+    "openai",
+    "ollama",
+    "groq",
+    "gemini",
+    "jev",
+    "codiv",
+    "typesafe",
+)
 
 _profile_registered = False
 
@@ -52,14 +64,17 @@ def _register_slim_harness_profile() -> None:
         general_purpose_subagent=GeneralPurposeSubagentProfile(enabled=False),
     )
 
-    for provider_key in ("openai", "ollama", "groq", "gemini", "jev", "codiv", "typesafe"):
+    for provider_key in _HARNESS_PROVIDER_KEYS:
         register_harness_profile(provider_key, slim_profile)
 
     _profile_registered = True
 
 
-def build_navigation_agent():
-    """Build (and cache) the deep navigation agent (JEV / codiv.ai model)."""
+def build_navigation_agent(model=None, tools=None, system_prompt: str | None = None):
+    """Build the deep navigation agent (JEV / codiv.ai model).
+
+    Args are injectable for tests; defaults preserve production behavior.
+    """
     from deepagents import create_deep_agent
 
     _register_slim_harness_profile()
@@ -67,16 +82,20 @@ def build_navigation_agent():
     logger.info("[NAVIGATION] Building deep navigation agent (jev)")
 
     agent = create_deep_agent(
-        model=get_navigation_llm(),
-        tools=[
-            navigate,
-            click_element,
-            type_text,
-            type_and_enter,
-            wait_seconds,
-            read_page,
-        ],
-        system_prompt=NAVIGATION_AGENT_PROMPT,
+        model=model if model is not None else get_navigation_llm(),
+        tools=(
+            tools
+            if tools is not None
+            else [
+                navigate,
+                click_element,
+                type_text,
+                type_and_enter,
+                wait_seconds,
+                read_page,
+            ]
+        ),
+        system_prompt=system_prompt or NAVIGATION_AGENT_PROMPT,
     )
 
     # TODO(roadmap 2.7): stream screenshots from deep-agent inner turns via SSE.

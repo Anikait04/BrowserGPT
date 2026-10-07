@@ -1,4 +1,4 @@
-# wait_for_user.py — wait_for_user node: pauses the graph until human input arrives.
+# human_gate.py — wait_for_user node (canonical; flat wait_for_user.py is a back-compat shim).
 #
 # Persistent-loop semantics: the agent NEVER terminates on its own.
 # - delegation "finish" routes here (not to END) so the user sees the result
@@ -11,53 +11,15 @@
 from langchain_core.messages import HumanMessage
 from langgraph.types import interrupt
 
-from src.logs import logger
-from src.workflow.agent_state import AgentState
-
-
-# Anything matching these (case-insensitive, stripped) ends the run.
-# Bare words match exactly; phrases match as prefix ("exit the loop", "quit now"...).
-EXIT_KEYWORDS = frozenset(
-    {
-        "exit",
-        "quit",
-        "q",
-        "stop",
-        "end",
-        "finish",
-        "done",
-        "bye",
-        "close",
-        "shutdown",
-    }
+from logs import logger
+from src.workflow.state import AgentState
+from src.workflow.shared.commands import (
+    CONTINUE_KEYWORDS,
+    EXIT_KEYWORDS,
+    EXIT_PHRASES,
+    is_continue_command,
+    is_exit_command,
 )
-
-EXIT_PHRASES = (
-    "exit the loop",
-    "quit the loop",
-    "end the loop",
-    "stop the loop",
-    "exit loop",
-    "quit loop",
-)
-
-# Inputs that mean "no new info, just carry on with the current goal".
-CONTINUE_KEYWORDS = frozenset({"continue", "go on", "proceed", "resume", ""})
-
-
-def is_exit_command(text: str) -> bool:
-    """True only when the user explicitly asks to exit the loop."""
-    normalized = (text or "").strip().lower().rstrip(" .!！")
-    if not normalized:
-        return False
-    if normalized in EXIT_KEYWORDS:
-        return True
-    return any(normalized.startswith(phrase) for phrase in EXIT_PHRASES)
-
-
-def is_continue_command(text: str) -> bool:
-    """True for bare 'continue'-style inputs that carry no new task info."""
-    return (text or "").strip().lower() in CONTINUE_KEYWORDS
 
 
 async def wait_for_user_node(state: AgentState) -> dict:
@@ -128,29 +90,9 @@ Please provide an instruction, type 'continue' to proceed, or type 'exit' to end
     # ── 2. New task after a finished goal -> replan as a fresh goal ──
     if came_from_finish and human_input and not is_continue_command(human_input):
         logger.info(f"[WAIT] New user task received, replanning: {human_input!r}")
-        return {
-            "waiting_for_user": False,
-            "exit_requested": False,
-            "goal": human_input,
-            "entire_plan": [],
-            "step_count": 0,
-            "steps": 0,
-            "current_delegated_task": "",
-            "delegation_decision": None,
-            "success_criteria": "",
-            "navigation_result": "",
-            "verification_result": None,
-            "extracted_information": None,
-            "extraction_format": "",
-            "artifact_id": None,
-            "artifact_path": None,
-            "navigation_iterations": 0,
-            "consecutive_failures": 0,
-            "agent_decision": "",
-            "final_response": "",
-            "messages": messages,
-            "progress_verification": f"New user task: {human_input}",
-        }
+        from src.workflow.state_factory import reset_for_new_task
+
+        return reset_for_new_task(human_input, messages)
 
     # ── 3. Default: resume current goal with human guidance ──
     return {

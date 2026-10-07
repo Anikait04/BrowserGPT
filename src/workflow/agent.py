@@ -1,81 +1,43 @@
+# agent.py — public entry points (backward-compat facade).
+#
+# Graph wiring lives in graph.py, run loops in runner.py, state construction in
+# state_factory.py. This module preserves the original imports
+# (graph, get_app, run_agent_server, resume_agent_server, run_agent) so
+# routers and external callers keep working.
+
+from __future__ import annotations
+
 import os
 import uuid
 
 import aiosqlite
 from dotenv import load_dotenv
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
-from langgraph.graph import END, StateGraph
+from langgraph.graph import END
 from langgraph.types import Command
 
 from src.config import thread_dir_name
-from src.logs import logger, log_separator
-from src.workflow.agent_state import AgentState
-from src.workflow.browsertools import close_browser
-from src.workflow.delegation import delegation_node
-from src.workflow.extract_information import extract_information_node
+from logs import logger, log_separator
+from src.workflow.state import AgentState
+from src.workflow.browser.manager import close_browser
+from src.workflow.graph import build_graph
 from src.workflow.llm import reset_session_id, set_session_id
-from src.workflow.navigation import navigation_node
-from src.workflow.planner import planner_node
-from src.workflow.routing import route_from_delegation, route_from_verification, route_from_wait_for_user
-from src.workflow.verify import verify_node
-from src.workflow.wait_for_user import wait_for_user_node
+from src.workflow.runner import (
+    artifact_info as _artifact_info_impl,
+    pause_prompt as _pause_prompt_impl,
+)
+from src.workflow.state_factory import initial_state
 
 load_dotenv()
 
 
-graph = StateGraph(AgentState)
-
-graph.add_node("planner", planner_node)
-graph.add_node("delegation", delegation_node)
-graph.add_node("navigation", navigation_node)
-graph.add_node("verify", verify_node)
-graph.add_node("extract_information", extract_information_node)
-graph.add_node("wait_for_user", wait_for_user_node)
-
-graph.set_entry_point("delegation")
-graph.add_edge("planner", "delegation")
-# Delegation is the single router: every run starts here, and based on context
-# it sends work to planner (no plan yet), navigation, extract_information, or
-# wait_for_user. Persistent loop: delegation NEVER routes to END directly.
-# "finish" (goal done, max steps, failure cap, unknown) routes to wait_for_user
-# so the user reviews the result and issues the next task. Only an explicit
-# user exit command (handled in wait_for_user) reaches END.
-graph.add_conditional_edges(
-    "delegation",
-    route_from_delegation,
-    {
-        "planner": "planner",
-        "navigation": "navigation",
-        "extract_information": "extract_information",
-        "wait_for_user": "wait_for_user",
-    },
-)
-
-graph.add_edge("navigation", "verify")
-graph.add_conditional_edges(
-    "verify",
-    route_from_verification,
-    {
-        "navigation": "navigation",
-        "delegation": "delegation",
-    },
-)
-graph.add_edge("extract_information", "delegation")
-# wait_for_user is the ONLY gateway to END (explicit user exit), otherwise
-# it returns to delegation, which routes to planner for fresh tasks
-# (empty plan) or resumes the current goal.
-graph.add_conditional_edges(
-    "wait_for_user",
-    route_from_wait_for_user,
-    {
-        "delegation": "delegation",
-        END: END,
-    },
-)
+# Module-level compiled graph (built once via build_graph for testability).
+graph = build_graph()
 
 # ── Checkpointer is async, so compile happens inside get_app() ──
 _checkpointer = None
 _app = None
+
 
 async def get_app():
     global _checkpointer, _app
@@ -86,70 +48,33 @@ async def get_app():
         _checkpointer = AsyncSqliteSaver(conn)
         _app = graph.compile(checkpointer=_checkpointer)
 
-        # Generate graph PNG once after compile
-        try:
-            png_bytes = _app.get_graph().draw_mermaid_png()
-            with open("agent_flow.png", "wb") as f:
-                f.write(png_bytes)
-        except Exception as e:
-            logger.warning(f"Could not generate graph PNG: {e}")
+        # Opt-in graph diagram export (disabled by default; see constants).
+        from src.workflow.constants import EXPORT_GRAPH_PNG, GRAPH_PNG_PATH
+
+        if EXPORT_GRAPH_PNG:
+            try:
+                png_bytes = _app.get_graph().draw_mermaid_png()
+                with open(GRAPH_PNG_PATH, "wb") as f:
+                    f.write(png_bytes)
+            except Exception as e:
+                logger.warning(f"Could not generate graph PNG: {e}")
 
     return _app
 
 
 def _build_initial_state(goal: str, max_steps: int, task_id: str | None) -> AgentState:
-    return {
-        "goal": goal,
-        "entire_plan": [],
-        "step_count": 0,
-        "agent_decision": "",
-        "task_id": task_id,   # ← passed into every node via state
-        "steps": 0,
-        "progress_verification": "",
-        "max_steps": max_steps,
-        "current_url": "",
-        "messages": [],
-        "current_delegated_task": "",
-        "delegation_decision": None,
-        "success_criteria": "",
-        "navigation_result": "",
-        "verification_result": None,
-        "extracted_information": None,
-        "extraction_format": "",
-        "artifact_id": None,
-        "artifact_path": None,
-        "waiting_for_user": False,
-        "exit_requested": False,
-        "final_response": "",
-        "navigation_iterations": 0,
-        "consecutive_failures": 0,
-        "all_actions": [],
-        "conversation_history": "",
-    }
+    """Deprecated wrapper — use state_factory.initial_state directly."""
+    return initial_state(goal, max_steps, task_id)
 
 
 def _artifact_info(values: dict) -> dict:
-    """Artifact download info for API responses (empty when no detailed PDF)."""
-    artifact_id = (values or {}).get("artifact_id")
-    if not artifact_id:
-        return {}
-    return {
-        "artifact_id": artifact_id,
-        "artifact_url": f"/extract/artifact/{artifact_id}",
-    }
+    """Deprecated wrapper — use runner.artifact_info directly."""
+    return _artifact_info_impl(values)
 
 
 def _pause_prompt(snapshot) -> str:
-    """Extract the human-readable interrupt prompt from a paused snapshot."""
-    try:
-        for task in getattr(snapshot, "tasks", []) or []:
-            for intr in getattr(task, "interrupts", []) or []:
-                value = getattr(intr, "value", "")
-                if value:
-                    return str(value)
-    except Exception:
-        pass
-    return "Agent is waiting for input. Type your next task or 'exit' to end."
+    """Deprecated wrapper — use runner.pause_prompt directly."""
+    return _pause_prompt_impl(snapshot)
 
 
 async def run_agent_server(
@@ -161,50 +86,10 @@ async def run_agent_server(
     - paused -> browser stays open, caller must call resume_agent_server().
     - done (explicit user exit — the only END path) -> browser closed.
     """
-    from src.workflow.browsertools import close_browser as _close_browser
+    from src.workflow.runner import AgentRunner
 
-    log_separator("AGENT RUN START (server)")
-    app = await get_app()
-    thread_id =str(uuid.uuid4())
-    config = {"configurable": {"thread_id": thread_id}}
-    logger.info(f"Thread ID: {thread_id}")
-    session_token = set_session_id(thread_id)
-    try:
-        state = _build_initial_state(goal, max_steps, task_id)
-        async for _ in app.astream(state, config=config, stream_mode="values"):
-            pass
-        snapshot = await app.aget_state(config)
-        values = snapshot.values or {}
-        if snapshot.next:  # paused for user input
-            return {
-                "status": "paused",
-                "thread_id": thread_id,
-                "prompt": _pause_prompt(snapshot),
-                "goal": values.get("goal", goal),
-                "final_response": values.get("final_response", ""),
-                "current_url": values.get("current_url", ""),
-                **_artifact_info(values),
-            }
-        # END — only reachable after explicit user exit.
-        if task_id:
-            from src.routers.common import push_done
-            await push_done(task_id, values.get("final_response") or "Task completed successfully")
-        await _close_browser()
-        return {
-            "status": "done",
-            "thread_id": thread_id,
-            "final_response": values.get("final_response", ""),
-            "current_url": values.get("current_url", ""),
-            **_artifact_info(values),
-        }
-    except Exception as e:
-        if task_id:
-            from src.routers.common import push_error
-            await push_error(task_id, str(e))
-        raise
-    finally:
-        reset_session_id(session_token)
-        log_separator("AGENT RUN PAUSED/END (server)")
+    runner = AgentRunner(get_app)
+    return await runner.start(goal, max_steps=max_steps, task_id=task_id)
 
 
 async def resume_agent_server(
@@ -216,55 +101,10 @@ async def resume_agent_server(
     - new task -> replanned via planner, runs until next pause/END.
     - otherwise -> resumes current goal until next pause/END.
     """
-    from src.workflow.browsertools import close_browser as _close_browser
+    from src.workflow.runner import AgentRunner
 
-    app = await get_app()
-    config = {"configurable": {"thread_id": thread_id}}
-    logger.info(f"Resuming thread: {thread_id}")
-    session_token = set_session_id(thread_id)
-    try:
-        # Keep SSE streaming coherent across resumes.
-        if task_id:
-            snapshot_before = await app.aget_state(config)
-            before_values = snapshot_before.values or {}
-            if before_values.get("task_id") != task_id and task_id:
-                # Rebind the run to the new stream's queue so screenshots flow.
-                try:
-                    await app.aupdate_state(config, {"task_id": task_id})
-                except Exception as e:
-                    logger.warning(f"[RUN] Could not rebind task_id: {e}")
-        async for _ in app.astream(Command(resume=str(human_input or "").strip()), config=config, stream_mode="values"):
-            pass
-        snapshot = await app.aget_state(config)
-        values = snapshot.values or {}
-        if snapshot.next:  # paused again
-            return {
-                "status": "paused",
-                "thread_id": thread_id,
-                "prompt": _pause_prompt(snapshot),
-                "goal": values.get("goal", ""),
-                "final_response": values.get("final_response", ""),
-                "current_url": values.get("current_url", ""),
-                **_artifact_info(values),
-            }
-        if task_id:
-            from src.routers.common import push_done
-            await push_done(task_id, values.get("final_response") or "Session ended")
-        await _close_browser()
-        return {
-            "status": "done",
-            "thread_id": thread_id,
-            "final_response": values.get("final_response", ""),
-            "current_url": values.get("current_url", ""),
-            **_artifact_info(values),
-        }
-    except Exception as e:
-        if task_id:
-            from src.routers.common import push_error
-            await push_error(task_id, str(e))
-        raise
-    finally:
-        reset_session_id(session_token)
+    runner = AgentRunner(get_app)
+    return await runner.resume(thread_id, human_input, task_id=task_id)
 
 
 async def run_agent(goal: str, max_steps: int = 30, thread_id: str = None, task_id: str = None):
@@ -280,46 +120,19 @@ async def run_agent(goal: str, max_steps: int = 30, thread_id: str = None, task_
     # Every LLM call in this run carries thread_id as its session id.
     session_token = set_session_id(thread_id)
 
-    state: AgentState = {
-        "goal": goal,
-        "entire_plan": [],
-        "step_count": 0,
-        "agent_decision": "",
-        "task_id": task_id,   # ← passed into every node via state
-        "steps": 0,
-        "progress_verification": "",
-        "max_steps": max_steps,
-        "current_url": "",
-        "messages": [],
-        "current_delegated_task": "",
-        "delegation_decision": None,
-        "success_criteria": "",
-        "navigation_result": "",
-        "verification_result": None,
-        "extracted_information": None,
-        "extraction_format": "",
-        "artifact_id": None,
-        "artifact_path": None,
-        "waiting_for_user": False,
-        "exit_requested": False,
-        "final_response": "",
-        "navigation_iterations": 0,
-        "consecutive_failures": 0,
-        "all_actions": [],
-    }
+    state: AgentState = initial_state(goal, max_steps, task_id)
 
     try:
         while True:
             async for _ in app.astream(state, config=config, stream_mode="values"):
                 pass
 
-
             current_state = await app.aget_state(config)
 
             if current_state.next:  # graph is paused (interrupt)
-                print("\n" + "="*60)
-                print(f"⏸  AGENT PAUSED | thread_id: {thread_id}")
-                print("="*60)
+                logger.info("=" * 60)
+                logger.info(f"AGENT PAUSED | thread_id: {thread_id}")
+                logger.info("=" * 60)
                 # Persistent loop: the run only ends on an explicit exit
                 # command. Anything else (new task / continue) resumes.
                 try:
@@ -362,3 +175,12 @@ async def run_agent(goal: str, max_steps: int = 30, thread_id: str = None, task_
         reset_session_id(session_token)
         await close_browser()
         log_separator("AGENT RUN END")
+
+
+__all__ = [
+    "graph",
+    "get_app",
+    "run_agent",
+    "run_agent_server",
+    "resume_agent_server",
+]

@@ -1,4 +1,4 @@
-# extract_information.py — depth-aware extraction node.
+# extraction.py — depth-aware extraction node (canonical; flat extract_information.py is a shim).
 #
 # Decides whether the user needs an overview (short text) or detailed
 # information (well-written PDF report), asking the human only when ambiguous:
@@ -6,27 +6,31 @@
 # - otherwise an LLM DepthDecision picks overview / detailed / ask_user
 # - ask_user pauses via interrupt(); unclear answers default to overview
 
-import os
-import uuid
-
-from langchain_core.exceptions import OutputParserException
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.prompts import ChatPromptTemplate
 from langgraph.types import interrupt
 from pydantic import ValidationError
 
-import src.config as config
-from src.logs import logger
-from src.workflow.agent_state import AgentState
+from logs import logger
+from src.workflow.state import AgentState
+from src.workflow.artifacts.store import ArtifactStore
+from src.workflow.browser.observation import read_page_snapshot
+from src.workflow.constants import PAGE_SNAPSHOT_CHARS, artifact_url
 from src.workflow.llm import get_llm
-from src.workflow.planner import _extract_json
-from src.workflow.prompt import (
+from src.workflow.prompts.extraction import (
     DEPTH_DECIDER_PROMPT,
     OVERVIEW_PROMPT,
     REPORT_COMPOSE_PROMPT,
 )
 from src.workflow.schemas import DepthDecision, ExtractionContent, ReportSection
-from src.workflow.verify import _page_snapshot
+from src.workflow.shared.json_utils import extract_json as _extract_json
+from src.workflow.llm.helpers import ainvoke_structured_with_fallback
+from src.workflow.shared.message_utils import message_content_to_str as _content_to_text_shared
+
+
+async def _page_snapshot() -> str:
+    """Deprecated wrapper — use browser.observation.read_page_snapshot directly."""
+    return await read_page_snapshot()
 
 _VALID_DEPTHS = ("overview", "detailed", "ask_user")
 
@@ -84,7 +88,9 @@ _OVERVIEW_ANSWER_HINTS = (
     "no,",
 )
 
-_SNAPSHOT_CHARS = 6000
+_SNAPSHOT_CHARS = PAGE_SNAPSHOT_CHARS
+
+# Local alias preserved for back-compat imports (use constants directly in new code).
 
 
 def _explicit_depth(text: str) -> str | None:
@@ -174,67 +180,19 @@ def _interpret_answer(answer: str) -> str:
     return "overview"
 
 
-def _sanitize(text: str) -> str:
-    """Strip characters the PDF core fonts cannot render."""
-    return (text or "").encode("latin-1", "replace").decode("latin-1")
+# PDF rendering now lives in artifacts.pdf; thin wrappers remain for back-compat.
+from src.workflow.artifacts.pdf import build_pdf as _build_pdf_impl
+from src.workflow.artifacts.pdf import sanitize as _sanitize
 
 
 def _build_pdf(content: ExtractionContent, dest_path: str) -> None:
-    """Render the report content to a PDF file."""
-    from fpdf import FPDF
-    from fpdf.enums import XPos, YPos
-
-    class ReportPDF(FPDF):
-        def footer(self):
-            self.set_y(-15)
-            self.set_font("helvetica", "I", 8)
-            self.cell(0, 10, f"Page {self.page_no()}/{{nb}}", align="C")
-
-    pdf = ReportPDF()
-    pdf.alias_nb_pages("{nb}")
-    pdf.set_auto_page_break(True, margin=20)
-    pdf.add_page()
-
-    def _line(style: str, size: int, text: str, height: int) -> None:
-        pdf.set_font("helvetica", style, size)
-        pdf.multi_cell(0, height, _sanitize(text), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-
-    _line("B", 20, content.title or "Report", 10)
-    pdf.ln(4)
-
-    if content.summary:
-        _line("I", 11, content.summary, 7)
-        pdf.ln(4)
-
-    for section in content.sections:
-        if section.heading:
-            _line("B", 14, section.heading, 8)
-        if section.body:
-            _line("", 11, section.body, 7)
-        pdf.ln(3)
-
-    if content.sources:
-        _line("B", 12, "Sources", 8)
-        for source in content.sources:
-            _line("", 10, f"- {source}", 6)
-
-    pdf.output(dest_path)
+    """Deprecated wrapper — use artifacts.pdf.build_pdf directly."""
+    _build_pdf_impl(content, dest_path)
 
 
 def _content_to_text(message) -> str:
-    """Flatten an LLM message payload to plain text."""
-    content = getattr(message, "content", message)
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts = []
-        for part in content:
-            if isinstance(part, dict):
-                parts.append(str(part.get("text", "")))
-            else:
-                parts.append(str(part))
-        return " ".join(p for p in parts if p)
-    return str(content or "")
+    """Deprecated alias for shared.message_utils.message_content_to_str."""
+    return _content_to_text_shared(message)
 
 
 async def _decide_depth(goal: str, task: str, snapshot: str) -> DepthDecision:
@@ -258,28 +216,15 @@ async def _decide_depth(goal: str, task: str, snapshot: str) -> DepthDecision:
         "task": task or "(none)",
         "snapshot": (snapshot or "")[:_SNAPSHOT_CHARS] or "(empty)",
     }
-
-    try:
-        chain = prompt | get_llm().with_structured_output(DepthDecision)
-        decision = await chain.ainvoke(invoke_args)
-        if isinstance(decision, dict):
-            return _coerce_to_depth(decision)
-        if isinstance(decision, DepthDecision):
-            return decision
-        return _coerce_to_depth(decision)
-    except (OutputParserException, ValidationError) as e:
-        logger.warning(f"[EXTRACT] Depth structured output failed ({e}); trying raw fallback")
-    except Exception as e:
-        logger.warning(f"[EXTRACT] Depth LLM call failed ({e}); trying raw fallback")
-
-    try:
-        raw_chain = prompt | get_llm()
-        raw_msg = await raw_chain.ainvoke(invoke_args)
-        parsed = _extract_json(_content_to_text(raw_msg))
-        return _coerce_to_depth(parsed if parsed is not None else _content_to_text(raw_msg))
-    except Exception as e:
-        logger.error(f"[EXTRACT] Depth fallback failed ({e}); defaulting to overview")
-        return DepthDecision(depth="overview", reasoning="depth fallback")
+    return await ainvoke_structured_with_fallback(
+        prompt=prompt,
+        invoke_args=invoke_args,
+        structured_chain_factory=lambda: prompt | get_llm().with_structured_output(DepthDecision),
+        raw_chain_factory=lambda: prompt | get_llm(),
+        coerce=_coerce_to_depth,
+        fallback=lambda: DepthDecision(depth="overview", reasoning="depth fallback"),
+        log_scope="EXTRACT",
+    )
 
 
 async def _write_overview(goal: str, task: str, snapshot: str) -> str:
@@ -298,7 +243,7 @@ async def _write_overview(goal: str, task: str, snapshot: str) -> str:
             "snapshot": (snapshot or "")[:_SNAPSHOT_CHARS] or "(empty)",
         }
     )
-    return _content_to_text(msg).strip()
+    return _content_to_text_shared(msg).strip()
 
 
 async def _compose_report(goal: str, task: str, snapshot: str, url: str) -> ExtractionContent:
@@ -320,29 +265,15 @@ async def _compose_report(goal: str, task: str, snapshot: str, url: str) -> Extr
         "url": url or "(unknown)",
         "snapshot": (snapshot or "")[:_SNAPSHOT_CHARS] or "(empty)",
     }
-
-    try:
-        chain = prompt | get_llm().with_structured_output(ExtractionContent)
-        content = await chain.ainvoke(invoke_args)
-        if isinstance(content, (dict, str)):
-            return _coerce_to_content(content, title_fallback)
-        if isinstance(content, ExtractionContent):
-            return content
-        return _coerce_to_content(content, title_fallback)
-    except (OutputParserException, ValidationError) as e:
-        logger.warning(f"[EXTRACT] Report structured output failed ({e}); trying raw fallback")
-    except Exception as e:
-        logger.warning(f"[EXTRACT] Report LLM call failed ({e}); trying raw fallback")
-
-    try:
-        raw_chain = prompt | get_llm()
-        raw_msg = await raw_chain.ainvoke(invoke_args)
-        text = _content_to_text(raw_msg)
-        parsed = _extract_json(text)
-        return _coerce_to_content(parsed if parsed is not None else text, title_fallback)
-    except Exception as e:
-        logger.error(f"[EXTRACT] Report fallback failed ({e}); using empty report")
-        return ExtractionContent(title=title_fallback, summary="")
+    return await ainvoke_structured_with_fallback(
+        prompt=prompt,
+        invoke_args=invoke_args,
+        structured_chain_factory=lambda: prompt | get_llm().with_structured_output(ExtractionContent),
+        raw_chain_factory=lambda: prompt | get_llm(),
+        coerce=lambda raw: _coerce_to_content(raw, title_fallback),
+        fallback=lambda: ExtractionContent(title=title_fallback, summary=""),
+        log_scope="EXTRACT",
+    )
 
 
 async def extract_information_node(state: AgentState) -> dict:
@@ -358,7 +289,7 @@ async def extract_information_node(state: AgentState) -> dict:
     existing_messages = list(state.get("messages", []) or [])
     logger.info("[EXTRACT] Extracting information (depth-aware)")
 
-    snapshot = await _page_snapshot()
+    snapshot = await read_page_snapshot()
     if not snapshot or "(page snapshot unavailable)" in snapshot.lower():
         logger.warning("[EXTRACT] No page content available")
         note = (
@@ -412,13 +343,10 @@ async def extract_information_node(state: AgentState) -> dict:
 
     if depth == "detailed":
         content = await _compose_report(goal, task, snapshot, url)
-        artifact_id = uuid.uuid4().hex
+        store = ArtifactStore()
         thread_id = task_id or "default"
-        dest_dir = os.path.join(config.ARTIFACTS_DIR, thread_id)
-        os.makedirs(dest_dir, exist_ok=True)
-        dest_path = os.path.join(dest_dir, f"{artifact_id}.pdf")
         try:
-            _build_pdf(content, dest_path)
+            artifact_id, dest_path = store.save_report(content, thread_id)
         except Exception as e:
             logger.exception(f"[EXTRACT] PDF build failed ({e}); degrading to overview")
             overview = content.summary or await _write_overview(goal, task, snapshot)
@@ -434,7 +362,7 @@ async def extract_information_node(state: AgentState) -> dict:
         logger.info(f"[EXTRACT] Detailed PDF saved: {dest_path}")
 
         summary = content.summary or "Detailed report ready."
-        link_line = f"Detailed PDF report: /extract/artifact/{artifact_id}"
+        link_line = f"Detailed PDF report: {artifact_url(artifact_id)}"
         body = f"{content.title}\n\n{summary}\n\n{link_line}" if content.title else f"{summary}\n\n{link_line}"
 
         if task_id:
@@ -444,7 +372,7 @@ async def extract_information_node(state: AgentState) -> dict:
                 await push_artifact(
                     task_id,
                     artifact_id=artifact_id,
-                    url=f"/extract/artifact/{artifact_id}",
+                    url=artifact_url(artifact_id),
                     title=content.title or "Detailed report",
                     message=summary,
                 )
