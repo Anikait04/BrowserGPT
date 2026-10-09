@@ -11,7 +11,7 @@
 from langchain_core.messages import HumanMessage
 from langgraph.types import interrupt
 
-from src.logs import logger
+from logs import logger
 from src.workflow.agent_state import AgentState
 
 
@@ -65,23 +65,14 @@ async def wait_for_user_node(state: AgentState) -> dict:
 
     Routes (via route_from_wait_for_user):
     - exit command -> END (the ONLY way the run terminates)
-    - new task after a finished goal -> delegation (empty plan routes to planner there)
+    - new task after a finished goal -> planner (new goal + cleared plan)
     - otherwise -> delegation (resume current goal with human guidance)
     """
     came_from_finish = state.get("agent_decision") == "finish"
     final_response = state.get("final_response", "")
     entire_plan = state.get("entire_plan", []) or []
 
-    # Delegation owns ambiguous/follow-up questions: when it routed here with a
-    # user_prompt, display it verbatim instead of the generic summaries below.
-    delegation_prompt = ""
-    if state.get("agent_decision") == "wait_for_user":
-        delegation_decision = state.get("delegation_decision") or {}
-        delegation_prompt = str(delegation_decision.get("user_prompt", "") or "").strip()
-
-    if delegation_prompt:
-        summary = delegation_prompt
-    elif came_from_finish:
+    if came_from_finish:
         summary = f"""
 Agent finished the current goal and is waiting for your next instruction.
 The browser stays open — the run does NOT end on its own.

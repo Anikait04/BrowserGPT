@@ -7,8 +7,8 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.graph import END, StateGraph
 from langgraph.types import Command
 
-from src.config import thread_dir_name
-from src.logs import logger, log_separator
+from config import thread_dir_name
+from logs import logger, log_separator
 from src.workflow.agent_state import AgentState
 from src.workflow.browsertools import close_browser
 from src.workflow.delegation import delegation_node
@@ -32,19 +32,16 @@ graph.add_node("verify", verify_node)
 graph.add_node("extract_information", extract_information_node)
 graph.add_node("wait_for_user", wait_for_user_node)
 
-graph.set_entry_point("delegation")
+graph.set_entry_point("planner")
 graph.add_edge("planner", "delegation")
-# Delegation is the single router: every run starts here, and based on context
-# it sends work to planner (no plan yet), navigation, extract_information, or
-# wait_for_user. Persistent loop: delegation NEVER routes to END directly.
-# "finish" (goal done, max steps, failure cap, unknown) routes to wait_for_user
-# so the user reviews the result and issues the next task. Only an explicit
+# Persistent loop: delegation NEVER routes to END directly. "finish"
+# (goal done, max steps, failure cap, unknown) routes to wait_for_user so
+# the user reviews the result and issues the next task. Only an explicit
 # user exit command (handled in wait_for_user) reaches END.
 graph.add_conditional_edges(
     "delegation",
     route_from_delegation,
     {
-        "planner": "planner",
         "navigation": "navigation",
         "extract_information": "extract_information",
         "wait_for_user": "wait_for_user",
@@ -62,12 +59,12 @@ graph.add_conditional_edges(
 )
 graph.add_edge("extract_information", "delegation")
 # wait_for_user is the ONLY gateway to END (explicit user exit), otherwise
-# it returns to delegation, which routes to planner for fresh tasks
-# (empty plan) or resumes the current goal.
+# it replans a fresh user task (planner) or resumes the goal (delegation).
 graph.add_conditional_edges(
     "wait_for_user",
     route_from_wait_for_user,
     {
+        "planner": "planner",
         "delegation": "delegation",
         END: END,
     },
@@ -124,7 +121,6 @@ def _build_initial_state(goal: str, max_steps: int, task_id: str | None) -> Agen
         "navigation_iterations": 0,
         "consecutive_failures": 0,
         "all_actions": [],
-        "conversation_history": "",
     }
 
 
@@ -135,7 +131,7 @@ def _artifact_info(values: dict) -> dict:
         return {}
     return {
         "artifact_id": artifact_id,
-        "artifact_url": f"/extract/artifact/{artifact_id}",
+        "artifact_url": f"/nav/artifact/{artifact_id}",
     }
 
 
@@ -153,7 +149,7 @@ def _pause_prompt(snapshot) -> str:
 
 
 async def run_agent_server(
-    goal: str, max_steps: int = 30, task_id: str | None = None
+    goal: str, max_steps: int = 30, thread_id: str | None = None, task_id: str | None = None
 ) -> dict:
     """Non-interactive start of a persistent run (for API servers).
 
@@ -165,7 +161,7 @@ async def run_agent_server(
 
     log_separator("AGENT RUN START (server)")
     app = await get_app()
-    thread_id =str(uuid.uuid4())
+    thread_id = thread_id or str(uuid.uuid4())
     config = {"configurable": {"thread_id": thread_id}}
     logger.info(f"Thread ID: {thread_id}")
     session_token = set_session_id(thread_id)
@@ -187,7 +183,7 @@ async def run_agent_server(
             }
         # END — only reachable after explicit user exit.
         if task_id:
-            from src.routers.common import push_done
+            from src.routers.agent_router import push_done
             await push_done(task_id, values.get("final_response") or "Task completed successfully")
         await _close_browser()
         return {
@@ -199,7 +195,7 @@ async def run_agent_server(
         }
     except Exception as e:
         if task_id:
-            from src.routers.common import push_error
+            from src.routers.agent_router import push_error
             await push_error(task_id, str(e))
         raise
     finally:
@@ -248,7 +244,7 @@ async def resume_agent_server(
                 **_artifact_info(values),
             }
         if task_id:
-            from src.routers.common import push_done
+            from src.routers.agent_router import push_done
             await push_done(task_id, values.get("final_response") or "Session ended")
         await _close_browser()
         return {
@@ -260,7 +256,7 @@ async def resume_agent_server(
         }
     except Exception as e:
         if task_id:
-            from src.routers.common import push_error
+            from src.routers.agent_router import push_error
             await push_error(task_id, str(e))
         raise
     finally:
@@ -349,12 +345,12 @@ async def run_agent(goal: str, max_steps: int = 30, thread_id: str = None, task_
                 break
             # Signal SSE stream: task finished successfully
         if task_id:
-            from src.routers.common import push_done
+            from src.routers.agent_router import push_done
             await push_done(task_id, "Task completed successfully")
     except Exception as e:
         # Signal SSE stream: task failed
         if task_id:
-            from src.routers.common import push_error
+            from src.routers.agent_router import push_error
             await push_error(task_id, str(e))
         raise
 

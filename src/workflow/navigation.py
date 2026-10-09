@@ -4,8 +4,8 @@ import json
 
 from langchain_core.messages import HumanMessage
 
-from src.config import DEEP_AGENT_RECURSION_LIMIT, MAX_NAVIGATION_ITERATIONS
-from src.logs import logger
+from config import DEEP_AGENT_RECURSION_LIMIT, MAX_NAVIGATION_ITERATIONS
+from logs import logger
 from src.workflow.agent_state import AgentState
 
 

@@ -9,7 +9,7 @@ import re
 
 from langchain.tools import tool
 
-from src.logs import logger
+from logs import logger
 from src.workflow.browsertools import get_browser
 
 

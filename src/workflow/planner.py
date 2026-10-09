@@ -8,7 +8,7 @@ from langchain_core.messages import AIMessage
 from langchain_core.prompts import ChatPromptTemplate
 from pydantic import ValidationError
 
-from src.logs import logger
+from logs import logger
 from src.workflow.agent_state import AgentState
 from src.workflow.llm import get_llm
 from src.workflow.prompt import PLANNER_PROMPT_V2
@@ -44,57 +44,6 @@ def _coerce_to_plan(raw: object, fallback_goal: str) -> Plan:
     return Plan(goal=fallback_goal, steps=[])
 
 
-_HISTORY_ENTRIES = 10
-_HISTORY_CHARS = 2000
-
-
-def _message_text(message) -> str:
-    """Flatten a message payload to plain text."""
-    content = getattr(message, "content", message)
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts = []
-        for part in content:
-            if isinstance(part, dict):
-                parts.append(str(part.get("text", "")))
-            else:
-                parts.append(str(part))
-        return " ".join(p for p in parts if p)
-    return str(content or "")
-
-
-def _format_history(state: AgentState) -> str:
-    """Compact conversation context for grounding follow-ups ("this", "it").
-
-    Covers the current page, prior extraction outcomes, and recent messages.
-    Bounded in entries and characters to cap token usage.
-    """
-    lines = []
-    current_url = state.get("current_url", "") or ""
-    if current_url:
-        lines.append(f"[browser] Current page: {current_url}")
-    extracted = state.get("extracted_information", "") or ""
-    if extracted:
-        lines.append(
-            f"[extraction] Previous result "
-            f"({state.get('extraction_format', '') or 'unknown format'}): "
-            f"{extracted[:300]}"
-        )
-    if state.get("artifact_id"):
-        lines.append(
-            f"[extraction] Detailed PDF available: /extract/artifact/{state.get('artifact_id')}"
-        )
-    messages = list(state.get("messages", []) or [])
-    for msg in messages[-_HISTORY_ENTRIES:]:
-        role = getattr(msg, "type", "") or "message"
-        text = _message_text(msg).strip()[:300]
-        if text:
-            lines.append(f"[{role}] {text}")
-    history = "\n".join(lines).strip()
-    return history[:_HISTORY_CHARS] or "(no prior conversation)"
-
-
 def _extract_json(text: str) -> object | None:
     """Extract the first JSON object from free-form LLM text."""
     if not text:
@@ -119,11 +68,10 @@ async def planner_node(state: AgentState) -> dict:
     logger.info("[PLANNER] Creating execution plan")
 
     goal_text = (state.get("goal") or "").strip()
-    history_text = _format_history(state)
     prompt = ChatPromptTemplate.from_messages(
         [
             ("system", PLANNER_PROMPT_V2),
-            ("human", "Goal: {goal}\n\nCONVERSATION HISTORY:\n{history}"),
+            ("human", "Goal: {goal}"),
         ]
     )
 
@@ -132,7 +80,7 @@ async def planner_node(state: AgentState) -> dict:
     # 1) Preferred path: structured output (aliases handle legacy keys).
     try:
         chain = prompt | get_llm().with_structured_output(Plan)
-        result = await chain.ainvoke({"goal": goal_text, "history": history_text})
+        result = await chain.ainvoke({"goal": goal_text})
         if isinstance(result, dict):
             result = _coerce_to_plan(result, goal_text)
     except (OutputParserException, ValidationError) as e:
@@ -146,7 +94,7 @@ async def planner_node(state: AgentState) -> dict:
     if result is None:
         try:
             raw_chain = prompt | get_llm()
-            raw_msg = await raw_chain.ainvoke({"goal": goal_text, "history": history_text})
+            raw_msg = await raw_chain.ainvoke({"goal": goal_text})
             raw_text = getattr(raw_msg, "content", str(raw_msg))
             if isinstance(raw_text, list):
                 raw_text = " ".join(

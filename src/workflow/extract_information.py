@@ -15,8 +15,8 @@ from langchain_core.prompts import ChatPromptTemplate
 from langgraph.types import interrupt
 from pydantic import ValidationError
 
-import src.config as config
-from src.logs import logger
+import config
+from logs import logger
 from src.workflow.agent_state import AgentState
 from src.workflow.llm import get_llm
 from src.workflow.planner import _extract_json
@@ -434,17 +434,17 @@ async def extract_information_node(state: AgentState) -> dict:
         logger.info(f"[EXTRACT] Detailed PDF saved: {dest_path}")
 
         summary = content.summary or "Detailed report ready."
-        link_line = f"Detailed PDF report: /extract/artifact/{artifact_id}"
+        link_line = f"Detailed PDF report: /nav/artifact/{artifact_id}"
         body = f"{content.title}\n\n{summary}\n\n{link_line}" if content.title else f"{summary}\n\n{link_line}"
 
         if task_id:
             try:
-                from src.routers.common import push_artifact
+                from src.routers.agent_router import push_artifact
 
                 await push_artifact(
                     task_id,
                     artifact_id=artifact_id,
-                    url=f"/extract/artifact/{artifact_id}",
+                    url=f"/nav/artifact/{artifact_id}",
                     title=content.title or "Detailed report",
                     message=summary,
                 )

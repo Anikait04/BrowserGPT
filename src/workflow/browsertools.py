@@ -2,7 +2,7 @@ from langchain.tools import tool
 from pydantic import BaseModel
 
 from src.workflow.browserplugin import Browser
-from src.logs import logger
+from logs import logger
 
 _browser_instance = None
 

@@ -15,7 +15,6 @@ class AgentState(TypedDict):
     current_url: str
     messages: Annotated[Sequence[BaseMessage], "node remarks messages exchanged so far"]
     task_id: Optional[str]   # SSE streaming task ID — None when not streaming
-    conversation_history: str  # human + agent messages (for LLM context) — updated by reducer
 
     # ── new delegated architecture ──
     current_delegated_task: str              # task string from the last DelegationDecision

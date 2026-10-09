@@ -1,7 +1,7 @@
 # app.py (at project root)
 import uvicorn
 from dotenv import load_dotenv
-from src.config import HOST, PORT
+from config import HOST, PORT
 
 load_dotenv()
 if __name__ == "__main__":

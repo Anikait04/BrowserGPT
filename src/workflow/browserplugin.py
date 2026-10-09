@@ -1,6 +1,6 @@
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
 import asyncio
-from src.logs import logger  # import your centralized logger here
+from logs import logger  # import your centralized logger here
 
 class Browser:
     def __init__(self):
