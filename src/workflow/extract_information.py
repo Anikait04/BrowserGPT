@@ -434,12 +434,12 @@ async def extract_information_node(state: AgentState) -> dict:
         logger.info(f"[EXTRACT] Detailed PDF saved: {dest_path}")
 
         summary = content.summary or "Detailed report ready."
-        link_line = f"Detailed PDF report: /nav/artifact/{artifact_id}"
+        link_line = f"Detailed PDF report: /extract/artifact/{artifact_id}"
         body = f"{content.title}\n\n{summary}\n\n{link_line}" if content.title else f"{summary}\n\n{link_line}"
 
         if task_id:
             try:
-                from src.routers.agent_router import push_artifact
+                from src.routers.common import push_artifact
 
                 await push_artifact(
                     task_id,
