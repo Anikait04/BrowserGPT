@@ -12,7 +12,7 @@ from langchain_core.messages import HumanMessage
 from langgraph.types import interrupt
 
 from logs import logger
-from src.workflow.agent_state import AgentState
+from src.agent.state import AgentState
 
 
 # Anything matching these (case-insensitive, stripped) ends the run.

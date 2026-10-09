@@ -17,16 +17,16 @@ from pydantic import ValidationError
 
 import config
 from logs import logger
-from src.workflow.agent_state import AgentState
-from src.workflow.llm import get_llm
-from src.workflow.planner import _extract_json
-from src.workflow.prompt import (
+from src.agent.state import AgentState
+from src.agent.llm.llm import get_llm
+from src.agent.nodes.planner import _extract_json
+from src.agent.prompts.prompt import (
     DEPTH_DECIDER_PROMPT,
     OVERVIEW_PROMPT,
     REPORT_COMPOSE_PROMPT,
 )
-from src.workflow.schemas import DepthDecision, ExtractionContent, ReportSection
-from src.workflow.verify import _page_snapshot
+from src.agent.schemas import DepthDecision, ExtractionContent, ReportSection
+from src.agent.nodes.verify import _page_snapshot
 
 _VALID_DEPTHS = ("overview", "detailed", "ask_user")
 

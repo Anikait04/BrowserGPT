@@ -9,16 +9,16 @@ from langgraph.types import Command
 
 from config import thread_dir_name
 from logs import logger, log_separator
-from src.workflow.agent_state import AgentState
-from src.workflow.browsertools import close_browser
-from src.workflow.delegation import delegation_node
-from src.workflow.extract_information import extract_information_node
-from src.workflow.llm import reset_session_id, set_session_id
-from src.workflow.navigation import navigation_node
-from src.workflow.planner import planner_node
-from src.workflow.routing import route_from_delegation, route_from_verification, route_from_wait_for_user
-from src.workflow.verify import verify_node
-from src.workflow.wait_for_user import wait_for_user_node
+from src.agent.state import AgentState
+from src.agent.browser.browsertools import close_browser
+from src.agent.nodes.delegation import delegation_node
+from src.agent.nodes.extract_information import extract_information_node
+from src.agent.llm.llm import reset_session_id, set_session_id
+from src.agent.nodes.navigation import navigation_node
+from src.agent.nodes.planner import planner_node
+from src.agent.routing import route_from_delegation, route_from_verification, route_from_wait_for_user
+from src.agent.nodes.verify import verify_node
+from src.agent.nodes.wait_for_user import wait_for_user_node
 
 load_dotenv()
 
@@ -157,7 +157,7 @@ async def run_agent_server(
     - paused -> browser stays open, caller must call resume_agent_server().
     - done (explicit user exit — the only END path) -> browser closed.
     """
-    from src.workflow.browsertools import close_browser as _close_browser
+    from src.agent.browser.browsertools import close_browser as _close_browser
 
     log_separator("AGENT RUN START (server)")
     app = await get_app()
@@ -212,7 +212,7 @@ async def resume_agent_server(
     - new task -> replanned via planner, runs until next pause/END.
     - otherwise -> resumes current goal until next pause/END.
     """
-    from src.workflow.browsertools import close_browser as _close_browser
+    from src.agent.browser.browsertools import close_browser as _close_browser
 
     app = await get_app()
     config = {"configurable": {"thread_id": thread_id}}

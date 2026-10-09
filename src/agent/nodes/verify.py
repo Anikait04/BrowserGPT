@@ -6,11 +6,11 @@ from pydantic import ValidationError
 
 from config import MAX_CONSECUTIVE_FAILURES, MAX_NAVIGATION_ITERATIONS
 from logs import logger
-from src.workflow.agent_state import AgentState
-from src.workflow.llm import get_llm
-from src.workflow.planner import _extract_json
-from src.workflow.prompt import VERIFY_PROMPT
-from src.workflow.schemas import VerificationResult
+from src.agent.state import AgentState
+from src.agent.llm.llm import get_llm
+from src.agent.nodes.planner import _extract_json
+from src.agent.prompts.prompt import VERIFY_PROMPT
+from src.agent.schemas import VerificationResult
 
 
 _TRUE_TOKENS = {"true", "yes", "completed", "complete", "success", "done", "1"}
@@ -134,7 +134,7 @@ def _fallback_malformed_criteria(task: str, criteria: str, current_url: str, sna
 async def _page_snapshot() -> str:
     """Fresh read-only page snapshot for evidence (allowed to touch the browser)."""
     try:
-        from src.workflow.browsertools import get_browser
+        from src.agent.browser.browsertools import get_browser
 
         browser = await get_browser()
         return await browser.read()

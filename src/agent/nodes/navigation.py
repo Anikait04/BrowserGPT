@@ -6,7 +6,7 @@ from langchain_core.messages import HumanMessage
 
 from config import DEEP_AGENT_RECURSION_LIMIT, MAX_NAVIGATION_ITERATIONS
 from logs import logger
-from src.workflow.agent_state import AgentState
+from src.agent.state import AgentState
 
 
 def _content_to_str(content) -> str:
@@ -58,7 +58,7 @@ def _collect_actions(result_messages: list) -> list[str]:
 def _current_url_safe() -> str:
     """Read the live browser URL without starting a browser instance."""
     try:
-        import src.workflow.browsertools as browsertools
+        import src.agent.browser.browsertools as browsertools
 
         browser = browsertools._browser_instance
         if browser is not None:
@@ -120,7 +120,7 @@ ATTEMPT:
 
     logger.info("[NAVIGATION] Starting navigation task")
 
-    from src.workflow.navigation_agent import get_navigation_agent
+    from src.agent.nodes.navigation_agent import get_navigation_agent
 
     all_actions = []
     navigation_result = ""

@@ -9,10 +9,10 @@ from langchain_core.prompts import ChatPromptTemplate
 from pydantic import ValidationError
 
 from logs import logger
-from src.workflow.agent_state import AgentState
-from src.workflow.llm import get_llm
-from src.workflow.prompt import PLANNER_PROMPT_V2
-from src.workflow.schemas import Plan
+from src.agent.state import AgentState
+from src.agent.llm.llm import get_llm
+from src.agent.prompts.prompt import PLANNER_PROMPT_V2
+from src.agent.schemas import Plan
 
 
 def _coerce_to_plan(raw: object, fallback_goal: str) -> Plan:

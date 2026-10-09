@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException
 
-from src.workflow.agent import resume_agent_server, run_agent_server
+from src.agent.agent import resume_agent_server, run_agent_server
 from src.logs import logger
 from src.routers.common import AgentRequest, ResumeRequest
 

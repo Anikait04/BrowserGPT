@@ -10,7 +10,7 @@ import re
 from langchain.tools import tool
 
 from logs import logger
-from src.workflow.browsertools import get_browser
+from src.agent.browser.browsertools import get_browser
 
 
 async def _get_stable_selector(el) -> str:

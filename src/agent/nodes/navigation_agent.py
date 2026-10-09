@@ -5,16 +5,16 @@
 # subagent, so the agent is exactly: browser tools + read_page + the LLM.
 
 from logs import logger
-from src.workflow.browsertools import (
+from src.agent.browser.browsertools import (
     click_element,
     navigate,
     type_and_enter,
     type_text,
     wait_seconds,
 )
-from src.workflow.llm import get_navigation_llm, get_session_id
-from src.workflow.page_reader import read_page
-from src.workflow.prompt import NAVIGATION_AGENT_PROMPT
+from src.agent.llm.llm import get_navigation_llm, get_session_id
+from src.agent.page_reader import read_page
+from src.agent.prompts.prompt import NAVIGATION_AGENT_PROMPT
 
 _profile_registered = False
 

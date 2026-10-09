@@ -3,7 +3,7 @@ import uuid
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 
-from src.workflow.agent import resume_agent_server, run_agent_server
+from src.agent.agent import resume_agent_server, run_agent_server
 from src.routers.common import (
     AgentRequest,
     ResumeRequest,

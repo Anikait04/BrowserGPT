@@ -10,7 +10,7 @@
 from langgraph.graph import END
 
 from logs import logger
-from src.workflow.agent_state import AgentState
+from src.agent.state import AgentState
 
 
 def route_from_delegation(state: AgentState) -> str:
