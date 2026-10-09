@@ -1,30 +1,38 @@
-# navigation.py — navigation node (canonical; flat navigation.py is a back-compat shim).
+# navigation.py — navigation node: invokes the deep agent that drives the browser.
 
 import json
 
 from langchain_core.messages import HumanMessage
 
 from src.config import DEEP_AGENT_RECURSION_LIMIT, MAX_NAVIGATION_ITERATIONS
-from logs import logger
-from src.workflow.state import AgentState
-from src.workflow.constants import (
-    ACTION_ARGS_PREVIEW_CHARS,
-    ACTION_RESULT_PREVIEW_CHARS,
-)
-from src.workflow.shared.message_utils import message_content_to_str as _content_to_str
+from src.logs import logger
+from src.workflow.agent_state import AgentState
 
 
-def _args_preview(args: dict, limit: int = ACTION_ARGS_PREVIEW_CHARS) -> str:
-    import json as _json
+def _content_to_str(content) -> str:
+    """Normalize message content (str or list of blocks) to a plain string."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, dict):
+                parts.append(str(block.get("text", "")))
+            else:
+                parts.append(str(block))
+        return " ".join(p for p in parts if p)
+    return str(content)
 
+
+def _args_preview(args: dict, limit: int = 120) -> str:
     try:
-        rendered = _json.dumps(args, ensure_ascii=False)
+        rendered = json.dumps(args, ensure_ascii=False)
     except Exception:
         rendered = str(args)
     return rendered if len(rendered) <= limit else rendered[:limit] + "..."
 
 
-def _result_preview(content, limit: int = ACTION_RESULT_PREVIEW_CHARS) -> str:
+def _result_preview(content, limit: int = 160) -> str:
     text = _content_to_str(content).replace("\n", " ")
     return text if len(text) <= limit else text[:limit] + "..."
 
@@ -49,9 +57,15 @@ def _collect_actions(result_messages: list) -> list[str]:
 
 def _current_url_safe() -> str:
     """Read the live browser URL without starting a browser instance."""
-    from src.workflow.browser.manager import BrowserSessionManager
+    try:
+        import src.workflow.browsertools as browsertools
 
-    return BrowserSessionManager.current_url_safe()
+        browser = browsertools._browser_instance
+        if browser is not None:
+            return browser.page.url
+    except Exception:
+        pass
+    return ""
 
 
 async def navigation_node(state: AgentState) -> dict:

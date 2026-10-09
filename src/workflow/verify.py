@@ -1,17 +1,16 @@
-# verify.py — verify node (canonical; flat verify.py is a back-compat shim).
+# verify.py — verify node: strict structured judge of the delegated task.
 
+from langchain_core.exceptions import OutputParserException
 from langchain_core.prompts import ChatPromptTemplate
 from pydantic import ValidationError
 
 from src.config import MAX_CONSECUTIVE_FAILURES, MAX_NAVIGATION_ITERATIONS
-from logs import logger
-from src.workflow.state import AgentState
-from src.workflow.constants import RECENT_ACTIONS_FOR_VERIFY
+from src.logs import logger
+from src.workflow.agent_state import AgentState
 from src.workflow.llm import get_llm
-from src.workflow.prompts.verify import VERIFY_PROMPT
+from src.workflow.planner import _extract_json
+from src.workflow.prompt import VERIFY_PROMPT
 from src.workflow.schemas import VerificationResult
-from src.workflow.shared.json_utils import extract_json as _extract_json
-from src.workflow.llm.helpers import ainvoke_structured_with_fallback
 
 
 _TRUE_TOKENS = {"true", "yes", "completed", "complete", "success", "done", "1"}
@@ -75,26 +74,9 @@ def _coerce_to_verdict(raw: object) -> VerificationResult:
     )
 
 
-_SEARCH_ENGINE_DOMAINS: tuple[str, ...] = (
-    "google.com",
-    "bing.com",
-    "duckduckgo.com",
-    "search.yahoo.com",
-    "yandex.",
-)
-
-
-def _extract_domains(text: str) -> set[str]:
-    """Lowercased host-like tokens found in free text (for mismatch detection)."""
-    import re as _re
-
-    return set(m.lower() for m in _re.findall(r"[a-z0-9-]+\.[a-z]{2,}", (text or "").lower()))
-
-
 def _is_search_engine_criteria(criteria: str) -> bool:
     cl = criteria.lower()
-    mentions_engine = any(d in cl for d in _SEARCH_ENGINE_DOMAINS) or "search engine domain" in cl
-    return mentions_engine and "search" in cl
+    return ("google.com" in cl or "search engine domain" in cl) and "search" in cl
 
 
 def _fallback_goal_achieved(
@@ -130,13 +112,10 @@ def _fallback_goal_achieved(
 
 
 def _fallback_malformed_criteria(task: str, criteria: str, current_url: str, snapshot: str) -> bool:
-    """Return True if criteria locks to an intermediate/search page but evidence shows the destination.
+    """Return True if criteria is malformed search-engine lock but evidence shows correct destination.
 
-    Generalizes the observed arxiv bug (criteria="URL is google.com ..." while
-    task wants an arxiv paper and the browser is on arxiv.org): whenever the
-    criteria demands staying on a search-engine/intermediate host but the live
-    URL is a different host mentioned by (or consistent with) the task and the
-    snapshot contains task keywords, judge against task+goal instead of criteria.
+    Catches the observed bug: task="get arxiv paper ..." but criteria="URL is google.com ..." while
+    current_url is arxiv.org and snapshot contains the paper. In that case judge against task, not criteria.
     """
     if not criteria or not task or not current_url:
         return False
@@ -144,37 +123,24 @@ def _fallback_malformed_criteria(task: str, criteria: str, current_url: str, sna
         return False
     url_l = current_url.lower()
     task_l = task.lower()
-    snap_l = (snapshot or "").lower()
-    if "(page snapshot unavailable)" in snap_l or "(unknown)" in url_l:
-        return False
-
-    criteria_domains = _extract_domains(criteria)
-    url_domains = _extract_domains(url_l)
-    if not url_domains or (criteria_domains & url_domains):
-        return False  # same host — not a mismatch
-    if any(d in url_l for d in _SEARCH_ENGINE_DOMAINS):
-        return False  # still on a search engine — no overshoot
-
-    # Destination host mentioned in the task (e.g. "arxiv.org", "docs.python.org")?
-    task_domains = _extract_domains(task_l)
-    if task_domains & url_domains:
-        task_keywords = [w for w in task_l.split() if len(w) > 3][:8]
-        hits = sum(1 for w in task_keywords if w.strip(".,:;()\"'") in snap_l or w.strip(".,:;()\"'") in url_l)
-        if hits >= max(1, len(task_keywords) // 3):
-            return True
-
-    # Back-compat: arxiv/paper tasks without an explicit host in the wording.
+    snap_l = snapshot.lower() if snapshot else ""
+    # Destination is arXiv / paper-like and task mentions it
     is_arxiv_dest = "arxiv.org" in url_l
-    task_wants_paper = any(k in task_l for k in ("arxiv", "paper", "research paper"))
-    snap_has_paper = "arxiv" in snap_l
-    return bool(is_arxiv_dest and task_wants_paper and snap_has_paper)
+    task_wants_paper = any(k in task_l for k in ("arxiv", "paper", "attention is all you need", "research paper"))
+    snap_has_paper = "attention is all you need" in snap_l or "arxiv" in snap_l
+    return is_arxiv_dest and task_wants_paper and snap_has_paper
 
 
 async def _page_snapshot() -> str:
-    """Deprecated wrapper — use browser.observation.read_page_snapshot directly."""
-    from src.workflow.browser.observation import read_page_snapshot
+    """Fresh read-only page snapshot for evidence (allowed to touch the browser)."""
+    try:
+        from src.workflow.browsertools import get_browser
 
-    return await read_page_snapshot()
+        browser = await get_browser()
+        return await browser.read()
+    except Exception as e:
+        logger.warning(f"[VERIFY] Could not read page snapshot: {e}")
+        return "(page snapshot unavailable)"
 
 
 async def verify_node(state: AgentState) -> dict:
@@ -193,9 +159,7 @@ async def verify_node(state: AgentState) -> dict:
     consecutive_failures = state.get("consecutive_failures", 0)
 
     # ── Force-fail path (no LLM): nav<->verify loop budget exhausted ──
-    # Unified with navigation.py guard (>=): navigation skips the call at the
-    # cap, verify force-fails any state that reached it.
-    if iterations >= MAX_NAVIGATION_ITERATIONS:
+    if iterations > MAX_NAVIGATION_ITERATIONS:
         verdict = VerificationResult(
             completed=False,
             reason=f"iteration limit of {MAX_NAVIGATION_ITERATIONS} reached",
@@ -203,9 +167,7 @@ async def verify_node(state: AgentState) -> dict:
         )
         logger.info("[VERIFY] Task incomplete (iteration limit force-fail)")
     else:
-        from src.workflow.browser.observation import read_page_snapshot
-
-        snapshot = await read_page_snapshot()
+        snapshot = await _page_snapshot()
 
         prompt = ChatPromptTemplate.from_messages(
             [
@@ -241,6 +203,8 @@ RECENT ACTIONS HISTORY:
             ]
         )
 
+        chain = prompt | get_llm().with_structured_output(VerificationResult)
+
         invoke_args = {
             "task": task or "(none)",
             "criteria": criteria or "(not specified - infer from the task)",
@@ -255,22 +219,47 @@ RECENT ACTIONS HISTORY:
             "navigation_result": navigation_result or "(no report)",
             "current_url": current_url or "(unknown)",
             "snapshot": snapshot,
-            "all_actions": "\n".join(all_actions[-RECENT_ACTIONS_FOR_VERIFY:]) or "(none recorded)",
+            "all_actions": "\n".join(all_actions[-15:]) or "(none recorded)",
         }
 
-        verdict = await ainvoke_structured_with_fallback(
-            prompt=prompt,
-            invoke_args=invoke_args,
-            structured_chain_factory=lambda: prompt | get_llm().with_structured_output(VerificationResult),
-            raw_chain_factory=lambda: prompt | get_llm(),
-            coerce=_coerce_to_verdict,
-            fallback=lambda: VerificationResult(
-                completed=False,
-                reason="verifier output unparseable; retrying navigation",
-                next_action="continue_task",
-            ),
-            log_scope="VERIFY",
-        )
+        verdict: VerificationResult | None = None
+
+        # 1) Preferred path: structured output (aliases handle near-miss keys).
+        try:
+            verdict = await chain.ainvoke(invoke_args)
+            if isinstance(verdict, dict):
+                verdict = _coerce_to_verdict(verdict)
+        except (OutputParserException, ValidationError) as e:
+            logger.warning(f"[VERIFY] Structured output failed ({e}); trying raw-JSON fallback")
+            verdict = None
+        except Exception as e:
+            logger.warning(f"[VERIFY] Verifier LLM call failed ({e}); trying raw-JSON fallback")
+            verdict = None
+
+        # 2) Fallback: plain LLM call + manual JSON extraction + alias mapping.
+        if verdict is None:
+            try:
+                raw_chain = prompt | get_llm()
+                raw_msg = await raw_chain.ainvoke(invoke_args)
+                raw_text = getattr(raw_msg, "content", str(raw_msg))
+                if isinstance(raw_text, list):
+                    raw_text = " ".join(
+                        part.get("text", "") if isinstance(part, dict) else str(part)
+                        for part in raw_text
+                    )
+                parsed = _extract_json(str(raw_text))
+                verdict = _coerce_to_verdict(parsed if parsed is not None else raw_text)
+                logger.warning(
+                    f"[VERIFY] Raw fallback produced: completed={verdict.completed!r} "
+                    f"next_action={verdict.next_action!r}"
+                )
+            except Exception as e:
+                logger.error(f"[VERIFY] Raw fallback also failed ({e}); retrying task")
+                verdict = VerificationResult(
+                    completed=False,
+                    reason="verifier output unparseable; retrying navigation",
+                    next_action="continue_task",
+                )
 
         if verdict.completed:
             logger.info("[VERIFY] Task completed")

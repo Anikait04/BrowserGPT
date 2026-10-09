@@ -1,45 +1,16 @@
-# observation.py — read-only page observation for verify / extraction / agent.
+# page_reader.py — LLM-free observation tool.
 #
-# Canonical home of both browser-read paths (moved from verify.py's inline
-# _page_snapshot and page_reader.py, both kept as shims):
-# - read_page_snapshot(): plain-text snapshot for LLM evidence (no LLM here).
-# - read_page (tool): URL + title + readable text + numbered interactive
-#   elements for the deep navigation agent. Deliberately NO LLM anywhere in
-#   this module — the agent decides what to do with the observation.
-
-from __future__ import annotations
+# Extracts the element-scraping logic that used to live inside
+# `observe_and_choose_node` (nodes.py) into plain functions and exposes it as a
+# `read_page` tool for the deep navigation agent. There is deliberately NO LLM
+# anywhere in this module — the agent decides what to do with the observation.
 
 import re
-from dataclasses import dataclass
 
 from langchain.tools import tool
 
-from logs import logger
-from src.workflow.browser.manager import get_browser
-
-
-@dataclass(frozen=True)
-class PageSnapshot:
-    url: str
-    text: str
-
-    @property
-    def available(self) -> bool:
-        return bool(self.text) and "(page snapshot unavailable)" not in self.text.lower()
-
-
-async def read_page_snapshot() -> str:
-    """Fresh read-only page snapshot for LLM evidence (allowed browser touch).
-
-    Returns the same string shape as Browser.read() so prompts are unchanged.
-    Never raises — returns "(page snapshot unavailable)" on failure.
-    """
-    try:
-        browser = await get_browser()
-        return await browser.read()
-    except Exception as e:
-        logger.warning(f"[OBSERVE] Could not read page snapshot: {e}")
-        return "(page snapshot unavailable)"
+from src.logs import logger
+from src.workflow.browsertools import get_browser
 
 
 async def _get_stable_selector(el) -> str:
@@ -167,11 +138,3 @@ async def read_page(dummy: str = "") -> str:
         lines.append("(no interactive elements found)")
 
     return "\n".join(lines)
-
-
-__all__ = [
-    "PageSnapshot",
-    "read_page_snapshot",
-    "get_interactable_elements",
-    "read_page",
-]

@@ -9,16 +9,8 @@
 
 from langgraph.graph import END
 
-from logs import logger
-from src.workflow.state import AgentState
-from src.workflow.constants import (
-    DEFAULT_MAX_STEPS,
-    NODE_DELEGATION,
-    NODE_EXTRACT,
-    NODE_NAVIGATION,
-    NODE_PLANNER,
-    NODE_WAIT_FOR_USER,
-)
+from src.logs import logger
+from src.workflow.agent_state import AgentState
 
 
 def route_from_delegation(state: AgentState) -> str:
@@ -36,23 +28,23 @@ def route_from_delegation(state: AgentState) -> str:
 
     if route == "finish":
         logger.info("[ROUTING] Goal finished, pausing for user (persistent loop)")
-        return NODE_WAIT_FOR_USER
+        return "wait_for_user"
 
-    if state.get("steps", 0) >= state.get("max_steps", DEFAULT_MAX_STEPS):
+    if state.get("steps", 0) >= state.get("max_steps", 30):
         logger.warning("[ROUTING] Max steps reached, pausing for user instead of ending")
-        return NODE_WAIT_FOR_USER
+        return "wait_for_user"
 
-    if route == NODE_PLANNER:
-        return NODE_PLANNER
-    if route == NODE_NAVIGATION:
-        return NODE_NAVIGATION
-    if route == NODE_EXTRACT:
-        return NODE_EXTRACT
-    if route == NODE_WAIT_FOR_USER:
-        return NODE_WAIT_FOR_USER
+    if route == "planner":
+        return "planner"
+    if route == "navigation":
+        return "navigation"
+    if route == "extract_information":
+        return "extract_information"
+    if route == "wait_for_user":
+        return "wait_for_user"
 
     logger.warning(f"[ROUTING] Unknown agent_decision {route!r}, pausing for user")
-    return NODE_WAIT_FOR_USER
+    return "wait_for_user"
 
 
 def route_from_wait_for_user(state: AgentState) -> str:
@@ -67,7 +59,7 @@ def route_from_wait_for_user(state: AgentState) -> str:
         return END
 
     logger.info("[ROUTING] Returning to delegation")
-    return NODE_DELEGATION
+    return "delegation"
 
 
 def route_from_verification(state: AgentState) -> str:
@@ -85,11 +77,11 @@ def route_from_verification(state: AgentState) -> str:
 
     if completed:
         logger.info("[ROUTING] Verification passed, returning to delegation")
-        return NODE_DELEGATION
+        return "delegation"
 
     if next_action == "report_failure":
         logger.warning("[ROUTING] Verification reported failure, returning to delegation")
-        return NODE_DELEGATION
+        return "delegation"
 
     logger.info("[ROUTING] Task incomplete, retrying navigation")
-    return NODE_NAVIGATION
+    return "navigation"

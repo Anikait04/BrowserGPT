@@ -1,9 +1,4 @@
-# state.py — canonical AgentState definition.
-#
-# All nodes,
-# routing, graph, and state_factory must import from here.
-
-from typing import Annotated, List, Optional, Sequence, TypedDict
+from typing import TypedDict, Sequence, Annotated, List, Optional
 import operator
 from langchain_core.messages import BaseMessage
 
@@ -38,9 +33,3 @@ class AgentState(TypedDict):
     navigation_iterations: int               # nav<->verify attempts for the current delegated task
     consecutive_failures: int                # failed verify verdicts for the current delegated task
     all_actions: Annotated[List[str], operator.add]  # execution history (append-only via reducer)
-
-
-# A node returns a *partial* state dict; LangGraph merges it into AgentState.
-StateUpdate = dict
-
-__all__ = ["AgentState", "StateUpdate"]

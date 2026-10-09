@@ -1,15 +1,40 @@
-# tools.py — LangChain browser tools for the deep navigation agent.
-#
-# Canonical home of the @tool wrappers (moved from browsertools.py, kept as a
-# shim). Tools acquire the browser via browser.manager.get_browser().
-
-from __future__ import annotations
-
 from langchain.tools import tool
 from pydantic import BaseModel
 
-from logs import logger
-from src.workflow.browser.manager import get_browser
+from src.workflow.browserplugin import Browser
+from src.logs import logger
+
+_browser_instance = None
+
+async def get_browser():
+    """Get or create browser instance"""
+    global _browser_instance
+
+    if _browser_instance is not None:
+        try:
+            _ = _browser_instance.page.url  # throws if browser/page is closed
+        except Exception:
+            logger.warning("Browser instance is stale, reinitializing...")
+            _browser_instance = None
+
+    if _browser_instance is None:
+        logger.info("Starting new browser instance")
+        _browser_instance = Browser()
+        await _browser_instance.start()
+        logger.info("Browser instance started")
+
+    return _browser_instance
+
+async def close_browser():
+    """Close browser and reset singleton so next call gets a fresh instance."""
+    global _browser_instance
+    if _browser_instance is not None:
+        try:
+            await _browser_instance.close()
+        except Exception as e:
+            logger.warning(f"Error closing browser: {e}")
+        finally:
+            _browser_instance = None
 
 
 @tool
@@ -32,30 +57,26 @@ class TypeTextInput(BaseModel):
 async def type_text(selector: str, value: str, press_enter: bool = False) -> str:
     """Type text into an input field or textarea."""
     logger.info(f"type_text called with selector={selector}, value={value}, press_enter={press_enter}")
-
+    
     browser = await get_browser()
     result = await browser.type(selector, value, press_enter=press_enter)
-
+    
     logger.info(f"type_text result: {result}")
     return result
-
 
 class TypeAndEnterInput(BaseModel):
     selector: str
     value: str
-
-
 @tool(args_schema=TypeAndEnterInput)
 async def type_and_enter(selector: str, value: str) -> str:
     """Type text into an input field and immediately press Enter."""
     logger.info(f"type_and_enter called with selector={selector}, value={value}")
-
+    
     browser = await get_browser()
     result = await browser.type_and_enter(selector, value)
-
+    
     logger.info(f"type_and_enter result: {result}")
     return result
-
 
 @tool
 async def click_element(selector: str) -> str:
@@ -80,14 +101,3 @@ async def wait_seconds(seconds: str) -> str:
     except ValueError:
         logger.error(f"wait_seconds error: invalid number '{seconds}'")
         return f"Error: '{seconds}' is not a valid number"
-
-
-__all__ = [
-    "navigate",
-    "type_text",
-    "TypeTextInput",
-    "type_and_enter",
-    "TypeAndEnterInput",
-    "click_element",
-    "wait_seconds",
-]

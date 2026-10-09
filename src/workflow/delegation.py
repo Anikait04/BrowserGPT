@@ -1,21 +1,19 @@
-# delegation.py — delegation node (canonical; flat delegation.py is a back-compat shim).
+# delegation.py — delegation node: decides which component handles the next unit of work.
 
+from langchain_core.exceptions import OutputParserException
 from langchain_core.prompts import ChatPromptTemplate
 from pydantic import ValidationError
 
 from src.config import MAX_CONSECUTIVE_FAILURES
-from logs import logger
-from src.workflow.state import AgentState
-from src.workflow.constants import VALID_DELEGATION_ACTIONS
+from src.logs import logger
+from src.workflow.agent_state import AgentState
 from src.workflow.llm import get_llm
-from src.workflow.prompts.delegation import DELEGATION_PROMPT
+from src.workflow.planner import _extract_json, _format_history
+from src.workflow.prompt import DELEGATION_PROMPT
 from src.workflow.schemas import DelegationDecision
-from src.workflow.shared.json_utils import extract_json as _extract_json
-from src.workflow.llm.helpers import ainvoke_structured_with_fallback
-from src.workflow.shared.message_utils import format_history as _format_history
 
 
-_VALID_ACTIONS = VALID_DELEGATION_ACTIONS
+_VALID_ACTIONS = ("planner", "navigation", "extract_information", "wait_for_user", "finish")
 
 # Plan steps containing one of these require the extract_information node.
 _EXTRACT_HINTS = (
@@ -325,6 +323,9 @@ CONSECUTIVE FAILED ATTEMPTS on current task:
         ]
     )
 
+    chain = prompt | get_llm().with_structured_output(DelegationDecision)
+
+    decision: DelegationDecision | None = None
     invoke_args = {
         "goal": goal,
         "step_count": step_count,
@@ -336,30 +337,51 @@ CONSECUTIVE FAILED ATTEMPTS on current task:
         "consecutive_failures": consecutive_failures,
     }
 
-    def _fallback_decision() -> DelegationDecision:
-        return DelegationDecision(
-            action="wait_for_user",
-            task=(
-                f"Could not determine the next step for goal {goal!r}; "
-                "please guide the next action."
-            ),
-            reasoning="delegation parse fallback",
-            success_criteria="",
-            user_prompt=(
-                "I couldn't work out the next step for your request — "
-                "what would you like me to do?"
-            ),
-        )
+    # 1) Preferred path: structured output (aliases handle legacy keys).
+    try:
+        decision = await chain.ainvoke(invoke_args)
+        if isinstance(decision, dict):
+            decision = _coerce_to_delegation(decision, current_delegated_task)
+    except (OutputParserException, ValidationError) as e:
+        logger.warning(f"[DELEGATION] Structured output failed ({e}); trying raw-JSON fallback")
+        decision = None
+    except Exception as e:
+        logger.warning(f"[DELEGATION] Delegation LLM call failed ({e}); trying raw-JSON fallback")
+        decision = None
 
-    decision = await ainvoke_structured_with_fallback(
-        prompt=prompt,
-        invoke_args=invoke_args,
-        structured_chain_factory=lambda: prompt | get_llm().with_structured_output(DelegationDecision),
-        raw_chain_factory=lambda: prompt | get_llm(),
-        coerce=lambda raw: _coerce_to_delegation(raw, current_delegated_task),
-        fallback=_fallback_decision,
-        log_scope="DELEGATION",
-    )
+    # 2) Fallback: plain LLM call + manual JSON extraction + alias mapping.
+    if decision is None:
+        try:
+            raw_chain = prompt | get_llm()
+            raw_msg = await raw_chain.ainvoke(invoke_args)
+            raw_text = getattr(raw_msg, "content", str(raw_msg))
+            if isinstance(raw_text, list):
+                raw_text = " ".join(
+                    part.get("text", "") if isinstance(part, dict) else str(part)
+                    for part in raw_text
+                )
+            parsed = _extract_json(str(raw_text))
+            decision = _coerce_to_delegation(
+                parsed if parsed is not None else raw_text, current_delegated_task
+            )
+            logger.warning(
+                f"[DELEGATION] Raw fallback produced: action={decision.action!r} task={decision.task!r}"
+            )
+        except Exception as e:
+            logger.error(f"[DELEGATION] Raw fallback also failed ({e}); pausing for user")
+            decision = DelegationDecision(
+                action="wait_for_user",
+                task=(
+                    f"Could not determine the next step for goal {goal!r}; "
+                    "please guide the next action."
+                ),
+                reasoning="delegation parse fallback",
+                success_criteria="",
+                user_prompt=(
+                    "I couldn't work out the next step for your request — "
+                    "what would you like me to do?"
+                ),
+            )
 
     logger.info(f"[DELEGATION] Delegating task: {decision.action} | task={decision.task!r} | criteria={decision.success_criteria!r} | reasoning={decision.reasoning!r}")
 
