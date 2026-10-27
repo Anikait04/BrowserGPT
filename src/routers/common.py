@@ -92,7 +92,7 @@ async def _stream_until_agent_done(queue: asyncio.Queue, agent_task: asyncio.Tas
                 break
 
 
-# ── Push helpers — call from workflow nodes to stream SSE events ────
+# ── Push helpers — call from agent nodes to stream SSE events ────
 async def push_screenshot(task_id: str, screenshot_b64: str, step: int, max_steps: int = 30, action: str = "", url: str = "", message: str = ""):
     """
     Call this after each browser action to push a screenshot event to the stream.

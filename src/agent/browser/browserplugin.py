@@ -15,7 +15,7 @@ class Browser:
             self.playwright = await async_playwright().start()
             self.browser = await self.playwright.chromium.launch(
                 headless=False,
-                args=[
+                args=[ 
                     '--start-maximized',
                     '--disable-blink-features=AutomationControlled',
                     "--no-sandbox",

@@ -2,7 +2,7 @@ import os
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 
-import src.config as config
+import config as config
 
 router = APIRouter(prefix="/extract", tags=["Extraction"])
 

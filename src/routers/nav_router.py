@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException
 
 from src.agent.agent import resume_agent_server, run_agent_server
-from src.logs import logger
+from logs import logger
 from src.routers.common import AgentRequest, ResumeRequest
 
 router = APIRouter(prefix="/nav", tags=["Navigation"])

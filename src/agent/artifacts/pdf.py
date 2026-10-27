@@ -1,7 +1,7 @@
 # pdf.py — detailed-report PDF rendering (extracted from extract_information.py).
 from __future__ import annotations
 
-from src.workflow.schemas import ExtractionContent
+from src.agent.schemas import ExtractionContent
 
 
 def sanitize(text: str) -> str:

@@ -4,10 +4,10 @@ from __future__ import annotations
 import os
 import uuid
 
-import src.config as config
-from src.workflow.artifacts.pdf import build_pdf
-from src.workflow.constants import artifact_url
-from src.workflow.schemas import ExtractionContent
+import config as config
+from src.agent.artifacts.pdf import build_pdf
+from src.agent.constants import artifact_url
+from src.agent.schemas import ExtractionContent
 
 
 class ArtifactStore:

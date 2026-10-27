@@ -68,7 +68,7 @@ BrowserGPT/
 ├── logs.py                 # Centralized logging (IST timezone, monthly folders)
 ├── src/
 │   ├── router_app.py   # FastAPI app with CORS
-│   ├── workflow/
+│   ├── agent/
 │   │   ├── agent.py        # LangGraph graph definition and run loop
 │   │   ├── agent_state.py  # TypedDict state schema
 │   │   ├── planner.py      # High-level plan generation node

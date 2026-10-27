@@ -13,7 +13,8 @@ from src.agent.browser.browsertools import (
     wait_seconds,
 )
 from src.agent.llm.llm import get_navigation_llm, get_session_id
-from src.agent.page_reader import read_page
+from deepagents import create_deep_agent
+from src.agent.browser.page_reader import read_page
 from src.agent.prompts.prompt import NAVIGATION_AGENT_PROMPT
 
 _profile_registered = False
@@ -60,8 +61,6 @@ def _register_slim_harness_profile() -> None:
 
 def build_navigation_agent():
     """Build (and cache) the deep navigation agent (JEV / codiv.ai model)."""
-    from deepagents import create_deep_agent
-
     _register_slim_harness_profile()
 
     logger.info("[NAVIGATION] Building deep navigation agent (jev)")
@@ -78,8 +77,6 @@ def build_navigation_agent():
         ],
         system_prompt=NAVIGATION_AGENT_PROMPT,
     )
-
-    # TODO(roadmap 2.7): stream screenshots from deep-agent inner turns via SSE.
     return agent
 
 

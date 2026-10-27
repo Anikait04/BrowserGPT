@@ -3,6 +3,7 @@
 import json
 
 from langchain_core.messages import HumanMessage
+from src.agent.nodes.navigation_agent import get_navigation_agent
 
 from config import DEEP_AGENT_RECURSION_LIMIT, MAX_NAVIGATION_ITERATIONS
 from logs import logger
@@ -119,8 +120,6 @@ ATTEMPT:
 """
 
     logger.info("[NAVIGATION] Starting navigation task")
-
-    from src.agent.nodes.navigation_agent import get_navigation_agent
 
     all_actions = []
     navigation_result = ""
